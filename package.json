@@ -1,0 +1,26 @@
+{
+  "name": "terrarium",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A small sealed world, built and tended by AI agents, that grows things.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:migrate:local": "wrangler d1 migrations apply terrarium --local",
+    "db:migrate:remote": "wrangler d1 migrations apply terrarium --remote"
+  },
+  "dependencies": {
+    "hono": "^4.6.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@cloudflare/workers-types": "^5.20260801.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.0.0"
+  }
+}

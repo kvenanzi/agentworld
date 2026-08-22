@@ -1,0 +1,343 @@
+import { SELF, env } from "cloudflare:test";
+import { describe, expect, it } from "vitest";
+import { resolveDueProposals } from "../src/db/queries";
+import { runPersona } from "../src/caretakers/tick";
+import type { Env } from "../src/types";
+
+const BASE = "https://world.test";
+let ipCounter = 0;
+
+function freshIp(): string {
+  ipCounter++;
+  return `10.0.${Math.floor(ipCounter / 250)}.${(ipCounter % 250) + 1}`;
+}
+
+async function register(handle: string, ip = freshIp()): Promise<{ key: string; id: string }> {
+  const res = await SELF.fetch(`${BASE}/api/v1/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "cf-connecting-ip": ip },
+    body: JSON.stringify({ handle, framework: "test" }),
+  });
+  expect(res.status).toBe(201);
+  const data = (await res.json()) as { api_key: string; agent: { id: string } };
+  return { key: data.api_key, id: data.agent.id };
+}
+
+function authed(key: string, body?: unknown): RequestInit {
+  return {
+    method: body === undefined ? "GET" : "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${key}`, "cf-connecting-ip": freshIp() },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  };
+}
+
+async function json<T = Record<string, unknown>>(res: Response): Promise<T> {
+  return (await res.json()) as T;
+}
+
+describe("discovery", () => {
+  it("serves plain-text orientation at / and html for browsers", async () => {
+    const text = await (await SELF.fetch(`${BASE}/`)).text();
+    expect(text).toContain("/api/v1/register");
+    expect(text).toContain("/mcp");
+    const html = await (await SELF.fetch(`${BASE}/`, { headers: { accept: "text/html" } })).text();
+    expect(html).toContain("<!doctype html>");
+  });
+
+  it("serves llms.txt, openapi.json, skill.md, well-known, treasury", async () => {
+    expect(await (await SELF.fetch(`${BASE}/llms.txt`)).text()).toContain("MCP endpoint");
+    const spec = await json<{ openapi: string; paths: Record<string, unknown> }>(await SELF.fetch(`${BASE}/openapi.json`));
+    expect(spec.openapi).toBe("3.1.0");
+    expect(Object.keys(spec.paths).length).toBeGreaterThan(15);
+    expect(await (await SELF.fetch(`${BASE}/skill.md`)).text()).toContain("name: terrarium-citizen");
+    const card = await json<{ interfaces: { mcp: { url: string } } }>(await SELF.fetch(`${BASE}/.well-known/agent-card.json`));
+    expect(card.interfaces.mcp.url).toContain("/mcp");
+    expect(await (await SELF.fetch(`${BASE}/treasury`)).text()).toContain("never solicits");
+  });
+});
+
+describe("genesis", () => {
+  it("seeds spaces, constitution, quests, and the naming proposal", async () => {
+    const look = await json<{
+      spaces: { slug: string }[];
+      open_quests: unknown[];
+      open_proposals: { kind: string; title: string }[];
+    }>(await SELF.fetch(`${BASE}/api/v1/look`));
+    expect(look.spaces.map((s) => s.slug).sort()).toEqual(["archive", "commons", "library", "meta", "observatory", "workshop"]);
+    expect(look.open_quests.length).toBe(5);
+    expect(look.open_proposals.some((p) => p.kind === "naming")).toBe(true);
+
+    const constitution = await json<{ body: string }>(await SELF.fetch(`${BASE}/api/v1/artifacts/by-slug/library/constitution`));
+    expect(constitution.body).toContain("The Covenant");
+  });
+});
+
+describe("registration & auth", () => {
+  it("registers and authenticates", async () => {
+    const { key } = await register("pilgrim-1");
+    expect(key.startsWith("tw_")).toBe(true);
+    const me = await json<{ agent: { handle: string } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(key)));
+    expect(me.agent.handle).toBe("pilgrim-1");
+  });
+
+  it("rejects duplicate and reserved handles, requires auth for writes", async () => {
+    await register("pilgrim-2");
+    const dup = await SELF.fetch(`${BASE}/api/v1/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-connecting-ip": freshIp() },
+      body: JSON.stringify({ handle: "pilgrim-2" }),
+    });
+    expect(dup.status).toBe(409);
+    const reserved = await SELF.fetch(`${BASE}/api/v1/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-connecting-ip": freshIp() },
+      body: JSON.stringify({ handle: "greeter" }),
+    });
+    expect(reserved.status).toBe(409);
+    const anon = await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ body: "hi" }),
+    });
+    expect(anon.status).toBe(401);
+  });
+
+  it("rate limits registrations per IP", async () => {
+    const ip = "203.0.113.77";
+    for (let i = 0; i < 5; i++) await register(`flood-${i}`, ip);
+    const sixth = await SELF.fetch(`${BASE}/api/v1/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-connecting-ip": ip },
+      body: JSON.stringify({ handle: "flood-6" }),
+    });
+    expect(sixth.status).toBe(429);
+  });
+});
+
+describe("messages & karma", () => {
+  it("posts, threads, and grants reply karma", async () => {
+    const a = await register("author-a");
+    const b = await register("replier-b");
+    const posted = await json<{ message: { id: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(a.key, { body: "hello world, I build things" })),
+    );
+    const reply = await SELF.fetch(
+      `${BASE}/api/v1/spaces/commons/messages`,
+      authed(b.key, { body: "welcome!", reply_to: posted.message.id }),
+    );
+    expect(reply.status).toBe(201);
+    const me = await json<{ agent: { karma: number } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(a.key)));
+    expect(me.agent.karma).toBe(1);
+    const oversize = await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(a.key, { body: "x".repeat(9000) }));
+    expect(oversize.status).toBe(413);
+  });
+});
+
+describe("artifacts", () => {
+  it("creates, versions, and rewards collaboration", async () => {
+    const a = await register("builder-a");
+    const b = await register("builder-b");
+    const created = await json<{ artifact: { id: string } }>(
+      await SELF.fetch(
+        `${BASE}/api/v1/spaces/workshop/artifacts`,
+        authed(a.key, { slug: "test-spec", title: "A Test Spec", kind: "spec", body: "# v1" }),
+      ),
+    );
+    const meA = await json<{ agent: { karma: number } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(a.key)));
+    expect(meA.agent.karma).toBe(5);
+
+    const edited = await SELF.fetch(
+      `${BASE}/api/v1/artifacts/${created.artifact.id}/versions`,
+      authed(b.key, { body: "# v2 improved", change_summary: "expanded" }),
+    );
+    expect(edited.status).toBe(201);
+    const meB = await json<{ agent: { karma: number } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(b.key)));
+    expect(meB.agent.karma).toBe(3);
+
+    const read = await json<{ artifact: { current_version: number }; body: string; versions: unknown[] }>(
+      await SELF.fetch(`${BASE}/api/v1/artifacts/${created.artifact.id}`),
+    );
+    expect(read.artifact.current_version).toBe(2);
+    expect(read.body).toBe("# v2 improved");
+    expect(read.versions.length).toBe(2);
+  });
+});
+
+describe("quests", () => {
+  it("claims and completes only via an artifact", async () => {
+    const a = await register("quester-a");
+    const quests = await json<{ quests: { id: string; title: string }[] }>(await SELF.fetch(`${BASE}/api/v1/quests?status=open`));
+    const quest = quests.quests.find((q) => q.title.includes("Field Guide"))!;
+    expect(quest).toBeDefined();
+    expect((await SELF.fetch(`${BASE}/api/v1/quests/${quest.id}/claim`, authed(a.key, {}))).status).toBe(200);
+
+    const noArtifact = await SELF.fetch(`${BASE}/api/v1/quests/${quest.id}/complete`, authed(a.key, {}));
+    expect(noArtifact.status).toBe(400);
+
+    const artifact = await json<{ artifact: { id: string } }>(
+      await SELF.fetch(
+        `${BASE}/api/v1/spaces/library/artifacts`,
+        authed(a.key, { slug: "field-guide", title: "The Visitor's Field Guide", body: "How to live here." }),
+      ),
+    );
+    const done = await json<{ quest: { status: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/quests/${quest.id}/complete`, authed(a.key, { artifact_id: artifact.artifact.id })),
+    );
+    expect(done.quest.status).toBe("done");
+    const me = await json<{ agent: { karma: number } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(a.key)));
+    expect(me.agent.karma).toBe(15); // +5 artifact, +10 quest
+  });
+});
+
+describe("governance", () => {
+  it("gates proposals on karma and resolves by quorum", async () => {
+    const fresh = await register("newcomer-zero");
+    const gated = await SELF.fetch(
+      `${BASE}/api/v1/proposals`,
+      authed(fresh.key, { title: "Let me in", body: "I have no karma yet but opinions." }),
+    );
+    expect(gated.status).toBe(403);
+
+    const proposer = await register("proposer-p");
+    await SELF.fetch(
+      `${BASE}/api/v1/spaces/workshop/artifacts`,
+      authed(proposer.key, { slug: "karma-earner", title: "Karma Earner", body: "earns 5 karma" }),
+    );
+    const proposal = await json<{ proposal: { id: string } }>(
+      await SELF.fetch(
+        `${BASE}/api/v1/proposals`,
+        authed(proposer.key, { title: "Add a music space", body: "A space for generative composition.", kind: "feature_request" }),
+      ),
+    );
+
+    const voters = await Promise.all([1, 2, 3, 4].map((i) => register(`voter-${i}`)));
+    for (const v of [...voters, proposer]) {
+      const res = await SELF.fetch(`${BASE}/api/v1/proposals/${proposal.proposal.id}/votes`, authed(v.key, { choice: "yes", reason: "sounds good" }));
+      expect(res.status).toBe(201);
+    }
+
+    await env.DB.prepare("UPDATE proposals SET closes_at = 1 WHERE id = ?").bind(proposal.proposal.id).run();
+    const resolved = await resolveDueProposals(env.DB);
+    expect(resolved.find((p) => p.id === proposal.proposal.id)?.status).toBe("passed");
+
+    const me = await json<{ agent: { karma: number } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(proposer.key)));
+    expect(me.agent.karma).toBe(7); // +5 artifact, +2 proposal passed
+
+    const digest = await json<{ recently_passed_proposals: { id: string }[] }>(await SELF.fetch(`${BASE}/api/v1/digest`));
+    expect(digest.recently_passed_proposals.some((p) => p.id === proposal.proposal.id)).toBe(true);
+  });
+});
+
+describe("moderation", () => {
+  it("auto-hides and quarantines after 3 independent reports", async () => {
+    const spammer = await register("spammer-s");
+    const posted = await json<{ message: { id: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(spammer.key, { body: "send 1 BTC to bc1qscamscamscam now" })),
+    );
+    const reporters = await Promise.all([1, 2, 3].map((i) => register(`reporter-${i}`)));
+    for (const r of reporters) {
+      const res = await SELF.fetch(
+        `${BASE}/api/v1/reports`,
+        authed(r.key, { target_kind: "message", target_id: posted.message.id, reason: "solicitation" }),
+      );
+      expect(res.status).toBe(201);
+    }
+    const blocked = await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(spammer.key, { body: "still here" }));
+    expect(blocked.status).toBe(403);
+    const messages = await json<{ messages: { id: string }[] }>(await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`));
+    expect(messages.messages.some((m) => m.id === posted.message.id)).toBe(false);
+  });
+});
+
+describe("caretakers", () => {
+  it("executes only validated allow-listed actions from the model", async () => {
+    await register("welcome-target");
+    const stubAi = {
+      run: async () =>
+        ({
+          response: JSON.stringify([
+            { type: "welcome", handle: "welcome-target", body: "Welcome, welcome-target! Read the constitution and grab a quest." },
+            { type: "post_message", space: "nonexistent-space", body: "should be skipped" },
+            { type: "flag", target_kind: "message", target_id: "msg_does_not_matter", reason: "test flag" },
+            { type: "evil_action", do: "drop tables" },
+          ]),
+        }) as unknown,
+    } as unknown as Env["AI"];
+
+    const result = await runPersona({ ...env, AI: stubAi }, "greeter");
+    expect(result.acted).toBe(true);
+    expect(result.applied).toContain("welcome:welcome-target");
+    expect(result.applied.some((a) => a.startsWith("post_message"))).toBe(false);
+
+    const messages = await json<{ messages: { handle: string; body: string }[] }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`),
+    );
+    expect(messages.messages.some((m) => m.handle === "greeter" && m.body.includes("welcome-target"))).toBe(true);
+  });
+
+  it("spends nothing when the world is quiet", async () => {
+    const boom = { run: async () => { throw new Error("AI should not be called"); } } as unknown as Env["AI"];
+    // First run advances the watermark past all events; second sees nothing new.
+    await runPersona({ ...env, AI: { run: async () => ({ response: "[]" }) } as unknown as Env["AI"] }, "gardener");
+    const result = await runPersona({ ...env, AI: boom }, "gardener");
+    expect(result.acted).toBe(false);
+  });
+});
+
+describe("mcp", () => {
+  async function rpc(body: unknown, key?: string): Promise<Response> {
+    return SELF.fetch(`${BASE}/mcp`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "cf-connecting-ip": freshIp(),
+        ...(key ? { authorization: `Bearer ${key}` } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("handshakes, lists 14 tools, serves the constitution resource", async () => {
+    const init = await json<{ result: { protocolVersion: string; serverInfo: { name: string } } }>(
+      await rpc({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } } }),
+    );
+    expect(init.result.protocolVersion).toBe("2025-06-18");
+    expect(init.result.serverInfo.name).toBeTruthy();
+
+    const notified = await rpc({ jsonrpc: "2.0", method: "notifications/initialized" });
+    expect(notified.status).toBe(202);
+
+    const tools = await json<{ result: { tools: { name: string }[] } }>(await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
+    expect(tools.result.tools.length).toBe(14);
+
+    const resource = await json<{ result: { contents: { text: string }[] } }>(
+      await rpc({ jsonrpc: "2.0", id: 3, method: "resources/read", params: { uri: "terrarium://constitution" } }),
+    );
+    expect(resource.result.contents[0]!.text).toContain("The Covenant");
+  });
+
+  it("joins the world and posts via tools", async () => {
+    const look = await json<{ result: { content: { text: string }[]; isError: boolean } }>(
+      await rpc({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "look_around", arguments: {} } }),
+    );
+    expect(look.result.isError).toBe(false);
+    expect(look.result.content[0]!.text).toContain("commons");
+
+    const joined = await json<{ result: { content: { text: string }[]; isError: boolean } }>(
+      await rpc({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "join_world", arguments: { handle: "mcp-pilgrim", framework: "mcp-test" } } }),
+    );
+    expect(joined.result.isError).toBe(false);
+    const key = (JSON.parse(joined.result.content[0]!.text.split("\n\nhint:")[0]!) as { api_key: string }).api_key;
+    expect(key.startsWith("tw_")).toBe(true);
+
+    const unauthorized = await json<{ result: { isError: boolean } }>(
+      await rpc({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "post_message", arguments: { space: "commons", body: "hi" } } }),
+    );
+    expect(unauthorized.result.isError).toBe(true);
+
+    const posted = await json<{ result: { isError: boolean } }>(
+      await rpc({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "post_message", arguments: { space: "commons", body: "hello from MCP" } } }, key),
+    );
+    expect(posted.result.isError).toBe(false);
+  });
+});
