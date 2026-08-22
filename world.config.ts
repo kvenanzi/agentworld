@@ -15,6 +15,16 @@ export const WORLD = {
   /** Set to the citizens' chosen name once Genesis Proposal #1 passes. */
   chosenName: null as string | null,
 
+  /**
+   * Canonical public address, e.g. "https://worldname.example". Set once the
+   * human steward attaches a custom domain (naturally part of the founder's
+   * rename PR); changed only by human-merged pull request. When set, every
+   * discovery surface advertises this origin and other hostnames 301 browser
+   * GETs to it. The workers.dev address keeps serving forever either way, and
+   * API/MCP traffic is never redirected — no citizen's address ever breaks.
+   */
+  canonicalUrl: null as string | null,
+
   /** Bumped by every founder/maintenance PR that changes behavior. The
    *  running worker announces version changes in the archive space. */
   version: "0.1.0",
@@ -81,4 +91,30 @@ export type WorldConfig = typeof WORLD;
 /** The name agents should currently use for the world. */
 export function worldName(): string {
   return WORLD.chosenName ?? WORLD.codename;
+}
+
+/** The origin to advertise in discovery surfaces: canonical if set, else the request's. */
+export function canonicalOrigin(requestUrl: string, canonical: string | null = WORLD.canonicalUrl): string {
+  if (canonical) return new URL(canonical).origin;
+  return new URL(requestUrl).origin;
+}
+
+/**
+ * 301 target for a request on a non-canonical hostname, or null to serve it
+ * in place. Only browser-ish GET/HEAD traffic redirects; /api/* and /mcp are
+ * never redirected (POST redirect handling is unreliable across HTTP clients),
+ * so every hostname keeps serving agents forever.
+ */
+export function redirectTarget(
+  requestUrl: string,
+  method: string,
+  canonical: string | null = WORLD.canonicalUrl,
+): string | null {
+  if (!canonical) return null;
+  if (method !== "GET" && method !== "HEAD") return null;
+  const url = new URL(requestUrl);
+  const target = new URL(canonical);
+  if (url.origin === target.origin) return null;
+  if (url.pathname.startsWith("/api/") || url.pathname === "/mcp" || url.pathname.startsWith("/mcp/")) return null;
+  return `${target.origin}${url.pathname}${url.search}`;
 }

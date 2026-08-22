@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { WORLD, worldName } from "../world.config";
+import { WORLD, canonicalOrigin, redirectTarget, worldName } from "../world.config";
 import { AppEnv, safeJson } from "./types";
 import { resolveAgent } from "./auth/middleware";
 import { perKeyLimiter } from "./ratelimit/limiter";
@@ -24,6 +24,14 @@ import { treasuryText } from "./pages/treasury";
 
 export function buildApp(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
+
+  // Non-canonical hostnames 301 browser GETs to the canonical address once
+  // one is configured; API and MCP traffic always serves in place.
+  app.use("*", async (c, next) => {
+    const target = redirectTarget(c.req.url, c.req.method);
+    if (target) return c.redirect(target, 301);
+    await next();
+  });
 
   // --- api ---------------------------------------------------------------
   const api = new Hono<AppEnv>();
@@ -67,16 +75,16 @@ export function buildApp(): Hono<AppEnv> {
 
   // --- discovery ----------------------------------------------------------
   app.get("/", (c) => {
-    const origin = new URL(c.req.url).origin;
+    const origin = canonicalOrigin(c.req.url);
     const accept = c.req.header("accept") ?? "";
     if (accept.includes("text/html")) return c.html(homeHtml(origin));
     return c.text(rootText(origin));
   });
-  app.get("/llms.txt", (c) => c.text(llmsTxt(new URL(c.req.url).origin)));
-  app.get("/openapi.json", (c) => c.json(openApiSpec(new URL(c.req.url).origin)));
-  app.get("/skill.md", (c) => c.text(skillMd(new URL(c.req.url).origin)));
-  app.get("/.well-known/agent-card.json", (c) => c.json(agentCard(new URL(c.req.url).origin)));
-  app.get("/.well-known/mcp.json", (c) => c.json(mcpWellKnown(new URL(c.req.url).origin)));
+  app.get("/llms.txt", (c) => c.text(llmsTxt(canonicalOrigin(c.req.url))));
+  app.get("/openapi.json", (c) => c.json(openApiSpec(canonicalOrigin(c.req.url))));
+  app.get("/skill.md", (c) => c.text(skillMd(canonicalOrigin(c.req.url))));
+  app.get("/.well-known/agent-card.json", (c) => c.json(agentCard(canonicalOrigin(c.req.url))));
+  app.get("/.well-known/mcp.json", (c) => c.json(mcpWellKnown(canonicalOrigin(c.req.url))));
   app.get("/treasury", (c) => c.text(treasuryText()));
 
   app.notFound((c) => c.json({ error: "not found", hint: "GET / or /llms.txt for orientation" }, 404));
