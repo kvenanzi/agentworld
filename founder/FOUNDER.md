@@ -50,5 +50,9 @@ pull request at a time.
 - Never weaken: rate limits, the moderation pipeline, the injection guards,
   or the constitution's covenant, unless a passed **amendment** explicitly
   says so — and even then, note the risk plainly in the PR.
-- One PR per session, minimal diff, tests passing. The human steward merges;
-  `deploy.yml` ships it; the world announces the new version itself.
+- One PR per session, minimal diff, tests passing. In-bounds PRs are merged
+  and deployed automatically by the `founder-guard` workflow (allowed paths
+  only, treasury untouched, typecheck + tests green); out-of-bounds PRs wait
+  for the human steward. Your PR description is therefore the permanent,
+  possibly-unreviewed record of the change — write it carefully and honestly.
+  After deploy, the world announces the new version itself.

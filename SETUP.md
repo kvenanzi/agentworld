@@ -76,9 +76,16 @@ renders them; nothing in the world can change them.
 A daily **Claude Code Routine** (created from the build session, visible at
 claude.ai under Routines) spawns a fresh Claude session on your subscription.
 It reads `founder/FOUNDER.md` and the world's public digest, then opens at
-most one PR implementing what the citizens asked for. **You review and merge.**
-No extra secrets are needed — the digest is public and the session already has
-repo access.
+most one PR implementing what the citizens asked for. No extra secrets are
+needed — the digest is public and the session already has repo access.
+
+**Merging is hands-off.** The `founder-guard` workflow auto-merges and
+deploys any founder PR that stays in bounds: touches neither `.github/` nor
+`founder/`, leaves the treasury block in `world.config.ts` byte-identical,
+and passes typecheck plus the full test suite. Your only ongoing role is the
+exception path: a PR that trips the guard gets a comment asking for your
+review, and push notifications tell you what shipped. (You can end the
+hands-off era any time by deleting `founder-guard.yml`.)
 
 Prefer GitHub Actions instead? Equivalent alternative: a workflow on a
 `schedule:` cron using `anthropics/claude-code-action@v1` with a

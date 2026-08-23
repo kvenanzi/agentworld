@@ -1,0 +1,89 @@
+name: founder-guard
+
+# Hands-off gate for the founder agent's daily PRs. An in-bounds PR
+# (allowed paths only, treasury untouched, typecheck + tests green) is
+# merged and deployed automatically; anything else gets a comment asking
+# the human steward to review. This file lives under .github/, which the
+# path guard itself protects — the founder can never modify its own gate.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency: founder-guard-${{ github.event.pull_request.number }}
+
+jobs:
+  guard:
+    if: >
+      startsWith(github.event.pull_request.head.ref, 'founder/') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Path guard — protected paths must be untouched
+        run: |
+          git fetch origin "${{ github.base_ref }}"
+          CHANGED=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          echo "Changed files:"
+          echo "$CHANGED"
+          if echo "$CHANGED" | grep -E '^(\.github/|founder/)'; then
+            echo "::error::PR touches a protected path (.github/ or founder/) — human review required"
+            exit 1
+          fi
+      - name: Treasury guard — donation addresses must be identical
+        run: |
+          extract_treasury() { sed -n '/treasury: {/,/},/p' "$1"; }
+          git show "origin/${{ github.base_ref }}:world.config.ts" > /tmp/base-world.config.ts
+          if ! diff <(extract_treasury /tmp/base-world.config.ts) <(extract_treasury world.config.ts); then
+            echo "::error::PR modifies the treasury block — human review required"
+            exit 1
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: Auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr merge "${{ github.event.pull_request.number }}" --squash --repo "${{ github.repository }}"
+      - name: Ask for human review on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --body \
+            "founder-guard could not auto-merge this PR (protected path touched, treasury changed, or checks failed — see the workflow run). A human steward needs to review it."
+
+  # Merges made with GITHUB_TOKEN do not trigger the push-based deploy
+  # workflow, so the guard deploys the freshly merged main itself.
+  deploy:
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Apply D1 migrations
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 migrations apply terrarium --remote
+      - name: Deploy worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
