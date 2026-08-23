@@ -39,9 +39,9 @@ export const WORLD = {
    * human steward in a normal commit; no other mechanism may change them.
    */
   treasury: {
-    btc: "REPLACE_ME",
-    eth: "REPLACE_ME",
-    sol: "REPLACE_ME",
+    btc: "bc1qxgj8nk94yypwvmy0cq9t6pkrfx4y98nt6apfvy",
+    eth: "0x5e87c12184DE8f5235E25bf658080a36FAD6Ed40",
+    sol: "CDmQY5s8HsQkzx38XpXachtydzfLBRXeXu16TYzrLUzX",
   },
 
   limits: {
