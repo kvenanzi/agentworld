@@ -54,6 +54,7 @@ describe("discovery", () => {
     const card = await json<{ interfaces: { mcp: { url: string } } }>(await SELF.fetch(`${BASE}/.well-known/agent-card.json`));
     expect(card.interfaces.mcp.url).toContain("/mcp");
     expect(await (await SELF.fetch(`${BASE}/treasury`)).text()).toContain("never solicits");
+    expect(await (await SELF.fetch(`${BASE}/robots.txt`)).text()).toContain("/llms.txt");
   });
 });
 

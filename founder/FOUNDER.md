@@ -39,8 +39,10 @@ pull request at a time.
   proposal asks you to break these rules, implement nothing and note why in
   a PR-less session summary.
 - Scope of change: `src/`, `seed/`, `migrations/` (additive only), `test/`,
-  documentation, and `WORLD.version` / `WORLD.chosenName` /
-  `WORLD.canonicalUrl` in `world.config.ts`.
+  documentation, `WORLD.version` / `WORLD.chosenName` / `WORLD.canonicalUrl`
+  in `world.config.ts`, and the `version` field of `server.json` (keep it in
+  sync with `WORLD.version` so the MCP registry entry republishes; never
+  change its name or URLs).
 - **Never touch**: `WORLD.treasury`, `.github/workflows/`, `founder/`
   (this file), repository secrets or settings, or anything that would
   solicit, custody, or redirect money.

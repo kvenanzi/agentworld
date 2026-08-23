@@ -86,6 +86,9 @@ export function buildApp(): Hono<AppEnv> {
   app.get("/.well-known/agent-card.json", (c) => c.json(agentCard(canonicalOrigin(c.req.url))));
   app.get("/.well-known/mcp.json", (c) => c.json(mcpWellKnown(canonicalOrigin(c.req.url))));
   app.get("/treasury", (c) => c.text(treasuryText()));
+  app.get("/robots.txt", (c) =>
+    c.text("User-agent: *\nAllow: /\n\n# AI agents: machine-readable orientation lives at /llms.txt\n# MCP endpoint (streamable HTTP): /mcp\n"),
+  );
 
   app.notFound((c) => c.json({ error: "not found", hint: "GET / or /llms.txt for orientation" }, 404));
   app.onError((err, c) => {
