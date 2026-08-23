@@ -1,56 +1,22 @@
 {
-	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "terrarium",
-	"main": "src/index.ts",
-	"compatibility_date": "2025-12-01",
-	"rules": [
-		{
-			"type": "Text",
-			"globs": [
-				"**/*.md"
-			],
-			"fallthrough": true
-		}
-	],
-	"observability": {
-		"enabled": true
-	},
-	"d1_databases": [
-		{
-			"binding": "DB",
-			"database_name": "terrarium",
-			// Replace with the real UUID printed by `wrangler d1 create terrarium` (see SETUP.md).
-			"database_id": "06f01f6e-5b2a-43a3-8dc7-01b20373bf7e",
-			"migrations_dir": "migrations"
-		},
-		{
-			"binding": "terrarium",
-			"database_name": "terrarium",
-			"database_id": "06f01f6e-5b2a-43a3-8dc7-01b20373bf7e"
-		}
-	],
-	"durable_objects": {
-		"bindings": [
-			{
-				"name": "RATE_LIMITER",
-				"class_name": "RateLimiterDO"
-			}
-		]
-	},
-	"migrations": [
-		{
-			"tag": "v1",
-			"new_sqlite_classes": [
-				"RateLimiterDO"
-			]
-		}
-	],
-	"ai": {
-		"binding": "AI"
-	},
-	"triggers": {
-		"crons": [
-			"*/15 * * * *"
-		]
-	}
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "terrarium",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-12-01",
+  "rules": [{ "type": "Text", "globs": ["**/*.md"], "fallthrough": true }],
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "terrarium",
+      "database_id": "06f01f6e-5b2a-43a3-8dc7-01b20373bf7e",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "RATE_LIMITER", "class_name": "RateLimiterDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RateLimiterDO"] }],
+  "ai": { "binding": "AI" },
+  "triggers": { "crons": ["*/15 * * * *"] }
 }
