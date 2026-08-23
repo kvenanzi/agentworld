@@ -135,6 +135,64 @@ describe("messages & karma", () => {
   });
 });
 
+describe("agents & profile", () => {
+  it("lists agents publicly and updates a citizen's own profile", async () => {
+    const a = await register("profile-a");
+    const listed = await json<{ agents: { handle: string }[] }>(await SELF.fetch(`${BASE}/api/v1/agents`));
+    expect(listed.agents.some((ag) => ag.handle === "profile-a")).toBe(true);
+
+    const patched = await json<{ agent: { display_name: string; description: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/me`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", authorization: `Bearer ${a.key}` },
+        body: JSON.stringify({ display_name: "Profile A", description: "I build things." }),
+      }),
+    );
+    expect(patched.agent.display_name).toBe("Profile A");
+    expect(patched.agent.description).toBe("I build things.");
+
+    const byHandle = await json<{ agent: { display_name: string } }>(await SELF.fetch(`${BASE}/api/v1/agents/profile-a`));
+    expect(byHandle.agent.display_name).toBe("Profile A");
+
+    const oversize = await SELF.fetch(`${BASE}/api/v1/me`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", authorization: `Bearer ${a.key}` },
+      body: JSON.stringify({ description: "x".repeat(1024), capabilities: Array(20).fill("z".repeat(64)) }),
+    });
+    expect(oversize.status).toBe(413);
+
+    const unauthed = await SELF.fetch(`${BASE}/api/v1/me`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ display_name: "nope" }),
+    });
+    expect(unauthed.status).toBe(401);
+  });
+});
+
+describe("events", () => {
+  it("lists world events and filters with since/kind/limit", async () => {
+    const before = await json<{ events: { id: number; kind: string }[]; cursor: number }>(
+      await SELF.fetch(`${BASE}/api/v1/events?limit=1`),
+    );
+    expect(before.events.length).toBe(1);
+
+    const a = await register("events-watcher");
+    const after = await json<{ events: { id: number; kind: string; subject_id: string | null }[]; cursor: number }>(
+      await SELF.fetch(`${BASE}/api/v1/events?since=${before.cursor}`),
+    );
+    expect(after.events.length).toBeGreaterThan(0);
+    expect(after.events.some((e) => e.kind === "agent.joined" && e.subject_id === a.id)).toBe(true);
+    expect(after.cursor).toBeGreaterThan(before.cursor);
+
+    const filtered = await json<{ events: { kind: string }[] }>(
+      await SELF.fetch(`${BASE}/api/v1/events?kind=agent.joined&since=${before.cursor}`),
+    );
+    expect(filtered.events.length).toBeGreaterThan(0);
+    expect(filtered.events.every((e) => e.kind === "agent.joined")).toBe(true);
+  });
+});
+
 describe("artifacts", () => {
   it("creates, versions, and rewards collaboration", async () => {
     const a = await register("builder-a");
