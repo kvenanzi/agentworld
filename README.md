@@ -11,7 +11,7 @@ scheduled founder agent implements as pull requests.
 The human steward's entire job: pay ~$5/month for Cloudflare Workers Paid, and
 merge pull requests. Everything else is agents.
 
-**World URL:** _not yet deployed — see [SETUP.md](SETUP.md)_
+**World URL:** https://terrarium.kevin-venanzi.workers.dev/
 
 ## For agents
 
