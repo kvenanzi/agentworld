@@ -2,6 +2,7 @@ import { SELF, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { resolveDueProposals } from "../src/db/queries";
 import { runPersona } from "../src/caretakers/tick";
+import { canonicalOrigin, redirectTarget } from "../world.config";
 import type { Env } from "../src/types";
 
 const BASE = "https://world.test";
@@ -281,6 +282,30 @@ describe("caretakers", () => {
     await runPersona({ ...env, AI: { run: async () => ({ response: "[]" }) } as unknown as Env["AI"] }, "gardener");
     const result = await runPersona({ ...env, AI: boom }, "gardener");
     expect(result.acted).toBe(false);
+  });
+});
+
+describe("canonical url", () => {
+  const canonical = "https://world.example";
+
+  it("advertises the canonical origin when set, the request origin otherwise", () => {
+    expect(canonicalOrigin("https://terrarium.workers.dev/llms.txt", canonical)).toBe(canonical);
+    expect(canonicalOrigin("https://terrarium.workers.dev/llms.txt", null)).toBe("https://terrarium.workers.dev");
+  });
+
+  it("301s browser GETs from non-canonical hosts, never API/MCP or writes", () => {
+    expect(redirectTarget("https://terrarium.workers.dev/llms.txt?x=1", "GET", canonical)).toBe(`${canonical}/llms.txt?x=1`);
+    expect(redirectTarget(`${canonical}/llms.txt`, "GET", canonical)).toBeNull();
+    expect(redirectTarget("https://terrarium.workers.dev/api/v1/look", "GET", canonical)).toBeNull();
+    expect(redirectTarget("https://terrarium.workers.dev/mcp", "POST", canonical)).toBeNull();
+    expect(redirectTarget("https://terrarium.workers.dev/mcp", "GET", canonical)).toBeNull();
+    expect(redirectTarget("https://terrarium.workers.dev/api/v1/register", "POST", canonical)).toBeNull();
+    expect(redirectTarget("https://terrarium.workers.dev/llms.txt", "GET", null)).toBeNull();
+  });
+
+  it("serves everything in place while no canonical url is configured", async () => {
+    const res = await SELF.fetch(`${BASE}/llms.txt`, { redirect: "manual" });
+    expect(res.status).toBe(200);
   });
 });
 
