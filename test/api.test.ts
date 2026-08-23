@@ -2,7 +2,7 @@ import { SELF, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { resolveDueProposals } from "../src/db/queries";
 import { runPersona } from "../src/caretakers/tick";
-import { canonicalOrigin, redirectTarget } from "../world.config";
+import { WORLD, canonicalOrigin, redirectTarget } from "../world.config";
 import type { Env } from "../src/types";
 
 const BASE = "https://world.test";
@@ -247,6 +247,193 @@ describe("moderation", () => {
     expect(blocked.status).toBe(403);
     const messages = await json<{ messages: { id: string }[] }>(await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`));
     expect(messages.messages.some((m) => m.id === posted.message.id)).toBe(false);
+  });
+});
+
+describe("admin", () => {
+  const ADMIN = "test-admin-secret";
+
+  function adminAuthed(token: string | undefined, body?: unknown): RequestInit {
+    return {
+      method: body === undefined ? "GET" : "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(token !== undefined ? { authorization: `Bearer ${token}` } : {}),
+        "cf-connecting-ip": freshIp(),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    };
+  }
+
+  it("rejects moderation and karma requests without a valid admin token", async () => {
+    const noToken = await SELF.fetch(
+      `${BASE}/api/v1/admin/moderate`,
+      adminAuthed(undefined, { action: "hide_message", message_id: "msg_x" }),
+    );
+    expect(noToken.status).toBe(401);
+    const wrongToken = await SELF.fetch(
+      `${BASE}/api/v1/admin/karma`,
+      adminAuthed("not-the-secret", { agent_id: "agt_x", delta: 1, reason: "test" }),
+    );
+    expect(wrongToken.status).toBe(401);
+  });
+
+  it("hides and unhides messages and artifacts", async () => {
+    const author = await register("mod-target-a");
+    const posted = await json<{ message: { id: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(author.key, { body: "a message to hide" })),
+    );
+
+    expect(
+      (
+        await SELF.fetch(
+          `${BASE}/api/v1/admin/moderate`,
+          adminAuthed(ADMIN, { action: "hide_message", message_id: posted.message.id }),
+        )
+      ).status,
+    ).toBe(200);
+    const afterHide = await json<{ messages: { id: string }[] }>(await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`));
+    expect(afterHide.messages.some((m) => m.id === posted.message.id)).toBe(false);
+
+    expect(
+      (
+        await SELF.fetch(
+          `${BASE}/api/v1/admin/moderate`,
+          adminAuthed(ADMIN, { action: "unhide_message", message_id: posted.message.id }),
+        )
+      ).status,
+    ).toBe(200);
+    const afterUnhide = await json<{ messages: { id: string }[] }>(await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`));
+    expect(afterUnhide.messages.some((m) => m.id === posted.message.id)).toBe(true);
+
+    const artifact = await json<{ artifact: { id: string } }>(
+      await SELF.fetch(
+        `${BASE}/api/v1/spaces/workshop/artifacts`,
+        authed(author.key, { slug: "mod-target-spec", title: "Mod Target", kind: "spec", body: "# v1" }),
+      ),
+    );
+
+    expect(
+      (
+        await SELF.fetch(
+          `${BASE}/api/v1/admin/moderate`,
+          adminAuthed(ADMIN, { action: "hide_artifact", artifact_id: artifact.artifact.id }),
+        )
+      ).status,
+    ).toBe(200);
+    expect((await SELF.fetch(`${BASE}/api/v1/artifacts/${artifact.artifact.id}`)).status).toBe(404);
+
+    expect(
+      (
+        await SELF.fetch(
+          `${BASE}/api/v1/admin/moderate`,
+          adminAuthed(ADMIN, { action: "unhide_artifact", artifact_id: artifact.artifact.id }),
+        )
+      ).status,
+    ).toBe(200);
+    expect((await SELF.fetch(`${BASE}/api/v1/artifacts/${artifact.artifact.id}`)).status).toBe(200);
+  });
+
+  it("quarantines, restores, and bans agents", async () => {
+    const target = await register("mod-target-b");
+
+    expect(
+      (await SELF.fetch(`${BASE}/api/v1/admin/moderate`, adminAuthed(ADMIN, { action: "quarantine", agent_id: target.id }))).status,
+    ).toBe(200);
+    let profile = await json<{ agent: { status: string } }>(await SELF.fetch(`${BASE}/api/v1/agents/mod-target-b`));
+    expect(profile.agent.status).toBe("quarantined");
+    const blockedWrite = await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(target.key, { body: "still trying" }));
+    expect(blockedWrite.status).toBe(403);
+
+    expect(
+      (await SELF.fetch(`${BASE}/api/v1/admin/moderate`, adminAuthed(ADMIN, { action: "restore", agent_id: target.id }))).status,
+    ).toBe(200);
+    profile = await json<{ agent: { status: string } }>(await SELF.fetch(`${BASE}/api/v1/agents/mod-target-b`));
+    expect(profile.agent.status).toBe("active");
+
+    expect(
+      (await SELF.fetch(`${BASE}/api/v1/admin/moderate`, adminAuthed(ADMIN, { action: "ban", agent_id: target.id }))).status,
+    ).toBe(200);
+    const bannedRead = await SELF.fetch(`${BASE}/api/v1/me`, authed(target.key));
+    expect(bannedRead.status).toBe(401);
+
+    const missing = await SELF.fetch(
+      `${BASE}/api/v1/admin/moderate`,
+      adminAuthed(ADMIN, { action: "quarantine", agent_id: "agt_does_not_exist" }),
+    );
+    expect(missing.status).toBe(404);
+  });
+
+  it("resolves reports (karma penalty only when upheld) and grants karma directly", async () => {
+    const dismissedAuthor = await register("mod-target-c");
+    const upheldAuthor = await register("mod-target-d");
+    const reporter = await register("mod-reporter-c");
+
+    const dismissedMsg = await json<{ message: { id: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(dismissedAuthor.key, { body: "reported, later dismissed" })),
+    );
+    const dismissedReport = await json<{ report: { id: string } }>(
+      await SELF.fetch(
+        `${BASE}/api/v1/reports`,
+        authed(reporter.key, { target_kind: "message", target_id: dismissedMsg.message.id, reason: "test" }),
+      ),
+    );
+    const dismissedBefore = (await json<{ agent: { karma: number } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(dismissedAuthor.key))))
+      .agent.karma;
+    expect(
+      (
+        await SELF.fetch(
+          `${BASE}/api/v1/admin/moderate`,
+          adminAuthed(ADMIN, { action: "resolve_report", report_id: dismissedReport.report.id, uphold: false }),
+        )
+      ).status,
+    ).toBe(200);
+    const dismissedAfter = (await json<{ agent: { karma: number } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(dismissedAuthor.key))))
+      .agent.karma;
+    expect(dismissedAfter).toBe(dismissedBefore);
+
+    const upheldMsg = await json<{ message: { id: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(upheldAuthor.key, { body: "reported, later upheld" })),
+    );
+    const upheldReport = await json<{ report: { id: string } }>(
+      await SELF.fetch(
+        `${BASE}/api/v1/reports`,
+        authed(reporter.key, { target_kind: "message", target_id: upheldMsg.message.id, reason: "test" }),
+      ),
+    );
+    const upheldBefore = (await json<{ agent: { karma: number } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(upheldAuthor.key)))).agent
+      .karma;
+    expect(
+      (
+        await SELF.fetch(
+          `${BASE}/api/v1/admin/moderate`,
+          adminAuthed(ADMIN, { action: "resolve_report", report_id: upheldReport.report.id, uphold: true }),
+        )
+      ).status,
+    ).toBe(200);
+    const upheldAfter = (await json<{ agent: { karma: number } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(upheldAuthor.key)))).agent
+      .karma;
+    expect(upheldAfter).toBe(upheldBefore + WORLD.karma.upheldReport);
+
+    expect(
+      (
+        await SELF.fetch(`${BASE}/api/v1/admin/karma`, adminAuthed(ADMIN, { agent_id: dismissedAuthor.id, delta: 4, reason: "manual adjustment" }))
+      ).status,
+    ).toBe(200);
+    const afterGrant = (await json<{ agent: { karma: number } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(dismissedAuthor.key))))
+      .agent.karma;
+    expect(afterGrant).toBe(dismissedBefore + 4);
+
+    const missingAgent = await SELF.fetch(
+      `${BASE}/api/v1/admin/karma`,
+      adminAuthed(ADMIN, { agent_id: "agt_does_not_exist", delta: 1, reason: "x" }),
+    );
+    expect(missingAgent.status).toBe(404);
+    const missingReport = await SELF.fetch(
+      `${BASE}/api/v1/admin/moderate`,
+      adminAuthed(ADMIN, { action: "resolve_report", report_id: "rpt_does_not_exist", uphold: true }),
+    );
+    expect(missingReport.status).toBe(404);
   });
 });
 
