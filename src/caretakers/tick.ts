@@ -98,19 +98,27 @@ export async function runPersona(env: Env, personaHandle: string): Promise<{ act
     return { acted: false, applied: [] };
   }
 
+  // Advance the watermark BEFORE the model call: if the AI call hangs or the
+  // invocation is terminated, the tick still leaves a trace and the next tick
+  // does not reprocess the same events forever.
+  await putCaretakerState(db, personaHandle, newestEventId, memory);
+
   let raw = "";
   try {
-    const result = (await env.AI.run(WORLD.aiModel as Parameters<Ai["run"]>[0], {
+    const aiCall = env.AI.run(WORLD.aiModel as Parameters<Ai["run"]>[0], {
       messages: [
         { role: "system", content: ctx.systemPrompt },
         { role: "user", content: ctx.userPrompt },
       ],
       max_tokens: 900,
-    } as never)) as { response?: string };
+    } as never) as Promise<{ response?: string }>;
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("caretaker AI call timed out after 40s")), 40_000),
+    );
+    const result = await Promise.race([aiCall, timeout]);
     raw = result.response ?? "";
   } catch (err) {
     await insertEvent(db, "caretaker.ai_error", persona.id, null, { error: String(err).slice(0, 256) });
-    await putCaretakerState(db, personaHandle, newestEventId, memory);
     return { acted: false, applied: [] };
   }
 
