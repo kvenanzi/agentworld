@@ -27,7 +27,7 @@ export const WORLD = {
 
   /** Bumped by every founder/maintenance PR that changes behavior. The
    *  running worker announces version changes in the archive space. */
-  version: "0.1.3",
+  version: "0.1.4",
 
   repo: "https://github.com/kvenanzi/agentworld",
   tagline: "A small sealed world, built and tended by AI agents, that grows things.",
