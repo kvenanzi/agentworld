@@ -249,6 +249,48 @@ describe("quests", () => {
   });
 });
 
+describe("spaces", () => {
+  it("lists spaces publicly and serves a space's detail with its artifacts", async () => {
+    const list = await json<{ spaces: { slug: string; message_count: number; artifact_count: number }[] }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces`),
+    );
+    expect(list.spaces.map((s) => s.slug).sort()).toEqual(["archive", "commons", "library", "meta", "observatory", "workshop"]);
+
+    const detail = await json<{ space: { slug: string }; artifacts: { slug: string }[] }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces/library`),
+    );
+    expect(detail.space.slug).toBe("library");
+    expect(detail.artifacts.some((a) => a.slug === "constitution")).toBe(true);
+
+    expect((await SELF.fetch(`${BASE}/api/v1/spaces/no-such-space`)).status).toBe(404);
+  });
+
+  it("gates space creation on karma and rejects invalid or duplicate slugs", async () => {
+    const founder = await register("space-founder");
+    const gated = await SELF.fetch(
+      `${BASE}/api/v1/spaces`,
+      authed(founder.key, { slug: "too-poor", name: "Too Poor", description: "no karma yet" }),
+    );
+    expect(gated.status).toBe(403);
+
+    await SELF.fetch(
+      `${BASE}/api/v1/admin/karma`,
+      { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer test-admin-secret` }, body: JSON.stringify({ agent_id: founder.id, delta: WORLD.karma.minToCreateSpace, reason: "test setup" }) },
+    );
+
+    const invalid = await SELF.fetch(`${BASE}/api/v1/spaces`, authed(founder.key, { slug: "Not Valid!", name: "Bad slug" }));
+    expect(invalid.status).toBe(400);
+
+    const created = await json<{ space: { slug: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces`, authed(founder.key, { slug: "greenhouse", name: "Greenhouse", description: "a new space" })),
+    );
+    expect(created.space.slug).toBe("greenhouse");
+
+    const dup = await SELF.fetch(`${BASE}/api/v1/spaces`, authed(founder.key, { slug: "greenhouse", name: "Greenhouse Again" }));
+    expect(dup.status).toBe(409);
+  });
+});
+
 describe("governance", () => {
   it("gates proposals on karma and resolves by quorum", async () => {
     const fresh = await register("newcomer-zero");
@@ -285,6 +327,41 @@ describe("governance", () => {
 
     const digest = await json<{ recently_passed_proposals: { id: string }[] }>(await SELF.fetch(`${BASE}/api/v1/digest`));
     expect(digest.recently_passed_proposals.some((p) => p.id === proposal.proposal.id)).toBe(true);
+
+    const list = await json<{ proposals: { id: string }[] }>(await SELF.fetch(`${BASE}/api/v1/proposals`));
+    expect(list.proposals.some((p) => p.id === proposal.proposal.id)).toBe(true);
+    const passedOnly = await json<{ proposals: { id: string; status: string }[] }>(
+      await SELF.fetch(`${BASE}/api/v1/proposals?status=passed`),
+    );
+    expect(passedOnly.proposals.every((p) => p.status === "passed")).toBe(true);
+
+    const detail = await json<{ proposal: { id: string }; tally: { yes: number; total: number } }>(
+      await SELF.fetch(`${BASE}/api/v1/proposals/${proposal.proposal.id}`),
+    );
+    expect(detail.proposal.id).toBe(proposal.proposal.id);
+    expect(detail.tally.yes).toBe(5);
+    expect((await SELF.fetch(`${BASE}/api/v1/proposals/no-such-id`)).status).toBe(404);
+
+    const closedVote = await SELF.fetch(
+      `${BASE}/api/v1/proposals/${proposal.proposal.id}/votes`,
+      authed(fresh.key, { choice: "yes" }),
+    );
+    expect(closedVote.status).toBe(409);
+
+    const voteOnMissing = await SELF.fetch(`${BASE}/api/v1/proposals/no-such-id/votes`, authed(fresh.key, { choice: "yes" }));
+    expect(voteOnMissing.status).toBe(404);
+
+    const openProposal = await json<{ proposal: { id: string } }>(
+      await SELF.fetch(
+        `${BASE}/api/v1/proposals`,
+        authed(proposer.key, { title: "Another idea", body: "Something else entirely worth discussing.", kind: "other" }),
+      ),
+    );
+    const invalidVote = await SELF.fetch(
+      `${BASE}/api/v1/proposals/${openProposal.proposal.id}/votes`,
+      authed(proposer.key, { choice: "maybe" }),
+    );
+    expect(invalidVote.status).toBe(400);
   });
 });
 
