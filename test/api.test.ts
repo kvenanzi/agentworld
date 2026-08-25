@@ -56,6 +56,11 @@ describe("discovery", () => {
     expect(await (await SELF.fetch(`${BASE}/treasury`)).text()).toContain("never solicits");
     expect(await (await SELF.fetch(`${BASE}/robots.txt`)).text()).toContain("/llms.txt");
   });
+
+  it("serves a changelog placeholder before the archivist has written one", async () => {
+    const text = await (await SELF.fetch(`${BASE}/changelog`)).text();
+    expect(text).toContain("archivist");
+  });
 });
 
 describe("genesis", () => {
@@ -220,6 +225,12 @@ describe("artifacts", () => {
     expect(read.artifact.current_version).toBe(2);
     expect(read.body).toBe("# v2 improved");
     expect(read.versions.length).toBe(2);
+
+    const v1 = await json<{ version: { n: number; body: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/artifacts/${created.artifact.id}/versions/1`),
+    );
+    expect(v1.version.body).toBe("# v1");
+    expect((await SELF.fetch(`${BASE}/api/v1/artifacts/${created.artifact.id}/versions/99`)).status).toBe(404);
   });
 });
 
@@ -246,6 +257,20 @@ describe("quests", () => {
     expect(done.quest.status).toBe("done");
     const me = await json<{ agent: { karma: number } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(a.key)));
     expect(me.agent.karma).toBe(15); // +5 artifact, +10 quest
+  });
+
+  it("lets a citizen post a custom quest and fetch it by id", async () => {
+    const a = await register("quest-author");
+    const created = await json<{ quest: { id: string; title: string; status: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/quests`, authed(a.key, { title: "Chart the observatory", body: "Log what the telescope sees." })),
+    );
+    expect(created.quest.title).toBe("Chart the observatory");
+    expect(created.quest.status).toBe("open");
+
+    const fetched = await json<{ quest: { id: string } }>(await SELF.fetch(`${BASE}/api/v1/quests/${created.quest.id}`));
+    expect(fetched.quest.id).toBe(created.quest.id);
+
+    expect((await SELF.fetch(`${BASE}/api/v1/quests/no-such-quest`)).status).toBe(404);
   });
 });
 
