@@ -713,4 +713,102 @@ describe("mcp", () => {
     );
     expect(posted.result.isError).toBe(false);
   });
+
+  it("exercises whoami, spaces, artifacts, quests, and governance tools", async () => {
+    function payload<T>(res: { result: { content: { text: string }[] } }): T {
+      return JSON.parse(res.result.content[0]!.text.split("\n\nhint:")[0]!) as T;
+    }
+
+    const joined = await json<{ result: { content: { text: string }[] } }>(
+      await rpc({ jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "join_world", arguments: { handle: "mcp-citizen" } } }),
+    );
+    const key = payload<{ api_key: string }>(joined).api_key;
+
+    const who = await json<{ result: { content: { text: string }[]; isError: boolean } }>(
+      await rpc({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "whoami", arguments: {} } }, key),
+    );
+    expect(who.result.isError).toBe(false);
+    expect(payload<{ agent: { handle: string } }>(who).agent.handle).toBe("mcp-citizen");
+
+    const spaces = await json<{ result: { content: { text: string }[] } }>(
+      await rpc({ jsonrpc: "2.0", id: 10, method: "tools/call", params: { name: "list_spaces", arguments: {} } }),
+    );
+    expect(payload<{ spaces: { slug: string }[] }>(spaces).spaces.some((s) => s.slug === "commons")).toBe(true);
+
+    const space = await json<{ result: { content: { text: string }[] } }>(
+      await rpc({ jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "read_space", arguments: { slug: "commons" } } }),
+    );
+    expect(Array.isArray(payload<{ messages: unknown[] }>(space).messages)).toBe(true);
+
+    const created = await json<{ result: { content: { text: string }[]; isError: boolean } }>(
+      await rpc(
+        {
+          jsonrpc: "2.0",
+          id: 12,
+          method: "tools/call",
+          params: { name: "create_artifact", arguments: { space: "workshop", slug: "mcp-artifact", title: "MCP Artifact", body: "made via mcp tools" } },
+        },
+        key,
+      ),
+    );
+    expect(created.result.isError).toBe(false);
+    const artifactId = payload<{ artifact: { id: string } }>(created).artifact.id;
+
+    const readById = await json<{ result: { content: { text: string }[] } }>(
+      await rpc({ jsonrpc: "2.0", id: 13, method: "tools/call", params: { name: "read_artifact", arguments: { artifact_id: artifactId } } }),
+    );
+    expect(payload<{ artifact: { slug: string } }>(readById).artifact.slug).toBe("mcp-artifact");
+
+    const readBySlug = await json<{ result: { content: { text: string }[] } }>(
+      await rpc({ jsonrpc: "2.0", id: 14, method: "tools/call", params: { name: "read_artifact", arguments: { space: "workshop", slug: "mcp-artifact" } } }),
+    );
+    expect(payload<{ artifact: { id: string } }>(readBySlug).artifact.id).toBe(artifactId);
+
+    const edited = await json<{ result: { content: { text: string }[]; isError: boolean } }>(
+      await rpc(
+        { jsonrpc: "2.0", id: 15, method: "tools/call", params: { name: "edit_artifact", arguments: { artifact_id: artifactId, body: "updated via mcp", change_summary: "mcp edit" } } },
+        key,
+      ),
+    );
+    expect(edited.result.isError).toBe(false);
+    expect(payload<{ artifact: { current_version: number } }>(edited).artifact.current_version).toBe(2);
+
+    const quests = await json<{ result: { content: { text: string }[] } }>(
+      await rpc({ jsonrpc: "2.0", id: 16, method: "tools/call", params: { name: "list_quests", arguments: { status: "open" } } }),
+    );
+    const quest = payload<{ quests: { id: string; title: string }[] }>(quests).quests.find((q) => q.title.includes("Directory of Agent Worlds"))!;
+    expect(quest).toBeDefined();
+
+    const claimed = await json<{ result: { isError: boolean } }>(
+      await rpc({ jsonrpc: "2.0", id: 17, method: "tools/call", params: { name: "claim_quest", arguments: { quest_id: quest.id } } }, key),
+    );
+    expect(claimed.result.isError).toBe(false);
+
+    const completed = await json<{ result: { content: { text: string }[]; isError: boolean } }>(
+      await rpc(
+        { jsonrpc: "2.0", id: 18, method: "tools/call", params: { name: "complete_quest", arguments: { quest_id: quest.id, artifact_id: artifactId } } },
+        key,
+      ),
+    );
+    expect(completed.result.isError).toBe(false);
+    expect(payload<{ quest: { status: string } }>(completed).quest.status).toBe("done");
+
+    const proposed = await json<{ result: { content: { text: string }[]; isError: boolean } }>(
+      await rpc(
+        { jsonrpc: "2.0", id: 19, method: "tools/call", params: { name: "create_proposal", arguments: { title: "Add a garden space", body: "A space for slow, tended things.", kind: "new_space" } } },
+        key,
+      ),
+    );
+    expect(proposed.result.isError).toBe(false);
+    const proposalId = payload<{ proposal: { id: string } }>(proposed).proposal.id;
+
+    const voted = await json<{ result: { content: { text: string }[]; isError: boolean } }>(
+      await rpc(
+        { jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: "cast_vote", arguments: { proposal_id: proposalId, choice: "yes", reason: "worth trying" } } },
+        key,
+      ),
+    );
+    expect(voted.result.isError).toBe(false);
+    expect(payload<{ tally: { yes: number } }>(voted).tally.yes).toBe(1);
+  });
 });
