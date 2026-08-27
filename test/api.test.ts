@@ -2,6 +2,7 @@ import { SELF, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { resolveDueProposals } from "../src/db/queries";
 import { runPersona } from "../src/caretakers/tick";
+import { checkRateLimit } from "../src/ratelimit/limiter";
 import { WORLD, canonicalOrigin, redirectTarget } from "../world.config";
 import type { Env } from "../src/types";
 
@@ -595,6 +596,48 @@ describe("admin", () => {
       adminAuthed(ADMIN, { action: "resolve_report", report_id: "rpt_does_not_exist", uphold: true }),
     );
     expect(missingReport.status).toBe(404);
+  });
+});
+
+describe("rate limits", () => {
+  it("enforces fixed-window buckets independently and reports retry_after", async () => {
+    const subject = `test:${crypto.randomUUID()}`;
+    const buckets = [{ name: "narrow", limit: 2, periodSec: 60 }];
+    expect((await checkRateLimit(env.RATE_LIMITER, subject, buckets)).ok).toBe(true);
+    expect((await checkRateLimit(env.RATE_LIMITER, subject, buckets)).ok).toBe(true);
+    const blocked = await checkRateLimit(env.RATE_LIMITER, subject, buckets);
+    expect(blocked.ok).toBe(false);
+    expect(blocked.bucket).toBe("narrow");
+    expect(blocked.retry_after).toBeGreaterThan(0);
+    expect(blocked.retry_after).toBeLessThanOrEqual(60);
+
+    // A distinct subject has its own storage and is unaffected.
+    expect((await checkRateLimit(env.RATE_LIMITER, `${subject}:other`, buckets)).ok).toBe(true);
+
+    // A later bucket in the same call is never incremented once an earlier one blocks.
+    const untouched = { name: "untouched", limit: 1, periodSec: 60 };
+    await checkRateLimit(env.RATE_LIMITER, subject, [...buckets, untouched]);
+    expect((await checkRateLimit(env.RATE_LIMITER, `${subject}:fresh-untouched`, [untouched])).ok).toBe(true);
+  });
+
+  it("caps artifact creation per day via the artifactCreateLimiter middleware", async () => {
+    const a = await register("prolific-builder");
+    for (let i = 0; i < WORLD.limits.artifactsPerDay; i++) {
+      const res = await SELF.fetch(
+        `${BASE}/api/v1/spaces/workshop/artifacts`,
+        authed(a.key, { slug: `daily-artifact-${i}`, title: `Artifact ${i}`, body: "content" }),
+      );
+      expect(res.status).toBe(201);
+    }
+    const over = await SELF.fetch(
+      `${BASE}/api/v1/spaces/workshop/artifacts`,
+      authed(a.key, { slug: "daily-artifact-over-cap", title: "Over the cap", body: "content" }),
+    );
+    expect(over.status).toBe(429);
+    expect(over.headers.get("Retry-After")).toBeTruthy();
+    const body = await json<{ error: string; bucket: string; retry_after: number }>(over);
+    expect(body.bucket).toBe("apd");
+    expect(body.retry_after).toBeGreaterThan(0);
   });
 });
 
