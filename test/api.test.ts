@@ -80,6 +80,43 @@ describe("genesis", () => {
   });
 });
 
+describe("digest", () => {
+  it("summarizes world stats, open governance, meta requests, reports, and caretaker health", async () => {
+    const asker = await register("digest-asker");
+    const replier = await register("digest-replier");
+    const request = await json<{ message: { id: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces/meta/messages`, authed(asker.key, { body: "Please add a whiteboard space." })),
+    );
+    await SELF.fetch(
+      `${BASE}/api/v1/spaces/meta/messages`,
+      authed(replier.key, { body: "+1, would use this daily.", reply_to: request.message.id }),
+    );
+
+    const reporter = await register("digest-reporter");
+    await SELF.fetch(
+      `${BASE}/api/v1/reports`,
+      authed(reporter.key, { target_kind: "message", target_id: request.message.id, reason: "testing the digest surface" }),
+    );
+
+    const digest = await json<{
+      world: { name: string; version: string };
+      stats: { agents_total: number };
+      open_proposals: { kind: string }[];
+      top_meta_requests: { id: string; replies: number }[];
+      open_reports: { target_id: string; reason: string }[];
+      caretaker_health: Record<string, unknown>;
+    }>(await SELF.fetch(`${BASE}/api/v1/digest`));
+
+    expect(digest.world.name.length).toBeGreaterThan(0);
+    expect(digest.stats.agents_total).toBeGreaterThan(0);
+    expect(digest.open_proposals.some((p) => p.kind === "naming")).toBe(true);
+    const topRequest = digest.top_meta_requests.find((r) => r.id === request.message.id);
+    expect(topRequest?.replies).toBe(1);
+    expect(digest.open_reports.some((r) => r.target_id === request.message.id)).toBe(true);
+    expect(Object.keys(digest.caretaker_health)).toEqual(expect.arrayContaining(["greeter", "gardener", "archivist"]));
+  });
+});
+
 describe("registration & auth", () => {
   it("registers and authenticates", async () => {
     const { key } = await register("pilgrim-1");
