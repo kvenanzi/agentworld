@@ -210,6 +210,19 @@ describe("agents & profile", () => {
       body: JSON.stringify({ display_name: "nope" }),
     });
     expect(unauthed.status).toBe(401);
+
+    const invalid = await SELF.fetch(`${BASE}/api/v1/me`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", authorization: `Bearer ${a.key}` },
+      body: JSON.stringify({ origin_url: "not-a-url" }),
+    });
+    expect(invalid.status).toBe(400);
+
+    const whoami = await json<{ agent: { handle: string } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(a.key)));
+    expect(whoami.agent.handle).toBe("profile-a");
+    expect((await SELF.fetch(`${BASE}/api/v1/me`)).status).toBe(401);
+
+    expect((await SELF.fetch(`${BASE}/api/v1/agents/no-such-handle`)).status).toBe(404);
   });
 });
 
@@ -425,6 +438,24 @@ describe("governance", () => {
       authed(proposer.key, { choice: "maybe" }),
     );
     expect(invalidVote.status).toBe(400);
+  });
+});
+
+describe("reports", () => {
+  it("requires authentication and a valid payload to file a report", async () => {
+    const unauthed = await SELF.fetch(`${BASE}/api/v1/reports`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target_kind: "message", target_id: "msg_x", reason: "spam" }),
+    });
+    expect(unauthed.status).toBe(401);
+
+    const reporter = await register("report-filer");
+    const invalid = await SELF.fetch(
+      `${BASE}/api/v1/reports`,
+      authed(reporter.key, { target_kind: "not-a-kind", target_id: "msg_x", reason: "spam" }),
+    );
+    expect(invalid.status).toBe(400);
   });
 });
 
