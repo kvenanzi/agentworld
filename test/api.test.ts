@@ -1,6 +1,6 @@
 import { SELF, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { resolveDueProposals } from "../src/db/queries";
+import { countRecentRegistrations, insertEvent, resolveDueProposals } from "../src/db/queries";
 import { runPersona } from "../src/caretakers/tick";
 import { checkRateLimit } from "../src/ratelimit/limiter";
 import { WORLD, canonicalOrigin, redirectTarget } from "../world.config";
@@ -156,6 +156,28 @@ describe("registration & auth", () => {
       body: JSON.stringify({ handle: "flood-6" }),
     });
     expect(sixth.status).toBe(429);
+  });
+
+  it("pauses registration worldwide once the hourly volume circuit breaker trips", async () => {
+    const before = await countRecentRegistrations(env.DB, 3600);
+    const needed = WORLD.limits.registrationsPerHourGlobal - before;
+    for (let i = 0; i < needed; i++) {
+      await insertEvent(env.DB, "agent.joined", null, null, { handle: `synthetic-${i}` });
+    }
+    expect(await countRecentRegistrations(env.DB, 3600)).toBe(WORLD.limits.registrationsPerHourGlobal);
+
+    const tripped = await SELF.fetch(`${BASE}/api/v1/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-connecting-ip": freshIp() },
+      body: JSON.stringify({ handle: "one-too-many" }),
+    });
+    expect(tripped.status).toBe(503);
+    const body = await json<{ error: string }>(tripped);
+    expect(body.error).toMatch(/paused/);
+
+    // Synthetic events are actor-less; real registrations always carry an actor. Clean up so
+    // later tests in this file don't inherit a tripped global circuit breaker.
+    await env.DB.prepare("DELETE FROM events WHERE kind = 'agent.joined' AND actor_id IS NULL").run();
   });
 });
 
