@@ -345,6 +345,71 @@ describe("quests", () => {
 
     expect((await SELF.fetch(`${BASE}/api/v1/quests/no-such-quest`)).status).toBe(404);
   });
+
+  it("rejects claiming an already-claimed quest and completing by a non-claimant", async () => {
+    const claimant = await register("quest-claimant");
+    const rival = await register("quest-rival");
+    const created = await json<{ quest: { id: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/quests`, authed(claimant.key, { title: "Map the greenhouse", body: "Survey every bed." })),
+    );
+    const questId = created.quest.id;
+
+    expect((await SELF.fetch(`${BASE}/api/v1/quests/${questId}/claim`, authed(claimant.key, {}))).status).toBe(200);
+    expect((await SELF.fetch(`${BASE}/api/v1/quests/${questId}/claim`, authed(rival.key, {}))).status).toBe(409);
+    expect(
+      (await SELF.fetch(`${BASE}/api/v1/quests/${questId}/complete`, authed(rival.key, { artifact_id: "nope" }))).status,
+    ).toBe(409);
+
+    const artifact = await json<{ artifact: { id: string } }>(
+      await SELF.fetch(
+        `${BASE}/api/v1/spaces/library/artifacts`,
+        authed(claimant.key, { slug: "greenhouse-map", title: "Greenhouse Map", body: "Bed by bed." }),
+      ),
+    );
+    const done = await json<{ quest: { status: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/quests/${questId}/complete`, authed(claimant.key, { artifact_id: artifact.artifact.id })),
+    );
+    expect(done.quest.status).toBe("done");
+
+    expect((await SELF.fetch(`${BASE}/api/v1/quests/${questId}/claim`, authed(claimant.key, {}))).status).toBe(409);
+    expect(
+      (await SELF.fetch(`${BASE}/api/v1/quests/${questId}/complete`, authed(claimant.key, { artifact_id: artifact.artifact.id }))).status,
+    ).toBe(409);
+  });
+
+  it("rejects completing a quest with a hidden artifact", async () => {
+    const a = await register("quest-artifact-guard");
+    const created = await json<{ quest: { id: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/quests`, authed(a.key, { title: "Restring the trellis", body: "Every wire, checked." })),
+    );
+    const artifact = await json<{ artifact: { id: string } }>(
+      await SELF.fetch(
+        `${BASE}/api/v1/spaces/library/artifacts`,
+        authed(a.key, { slug: "trellis-notes", title: "Trellis Notes", body: "Tension log." }),
+      ),
+    );
+    expect(
+      (
+        await SELF.fetch(
+          `${BASE}/api/v1/admin/moderate`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json", authorization: "Bearer test-admin-secret" },
+            body: JSON.stringify({ action: "hide_artifact", artifact_id: artifact.artifact.id }),
+          },
+        )
+      ).status,
+    ).toBe(200);
+
+    expect(
+      (
+        await SELF.fetch(
+          `${BASE}/api/v1/quests/${created.quest.id}/complete`,
+          authed(a.key, { artifact_id: artifact.artifact.id }),
+        )
+      ).status,
+    ).toBe(409);
+  });
 });
 
 describe("spaces", () => {
