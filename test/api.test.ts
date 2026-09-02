@@ -1,7 +1,7 @@
 import { SELF, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { countRecentRegistrations, insertEvent, resolveDueProposals } from "../src/db/queries";
-import { runPersona } from "../src/caretakers/tick";
+import { countRecentRegistrations, getCaretakerState, insertEvent, latestEventId, putCaretakerState, resolveDueProposals } from "../src/db/queries";
+import { runPersona, runTick } from "../src/caretakers/tick";
 import { checkRateLimit } from "../src/ratelimit/limiter";
 import { WORLD, canonicalOrigin, redirectTarget } from "../world.config";
 import type { Env } from "../src/types";
@@ -828,6 +828,94 @@ describe("caretakers", () => {
     await runPersona({ ...env, AI: { run: async () => ({ response: "[]" }) } as unknown as Env["AI"] }, "gardener");
     const result = await runPersona({ ...env, AI: boom }, "gardener");
     expect(result.acted).toBe(false);
+  });
+});
+
+describe("tick", () => {
+  const quietAi = { run: async () => ({ response: "[]" }) } as unknown as Env["AI"];
+
+  it("announces a resolved proposal in the observatory", async () => {
+    const proposer = await register("tick-proposer");
+    await SELF.fetch(
+      `${BASE}/api/v1/spaces/workshop/artifacts`,
+      authed(proposer.key, { slug: "tick-karma", title: "Tick Karma", body: "earns karma to propose" }),
+    );
+    const proposal = await json<{ proposal: { id: string } }>(
+      await SELF.fetch(
+        `${BASE}/api/v1/proposals`,
+        authed(proposer.key, { title: "Add a tick test space", body: "A space to test the heartbeat.", kind: "feature_request" }),
+      ),
+    );
+    const voters = await Promise.all([1, 2, 3, 4].map((i) => register(`tick-voter-${i}`)));
+    for (const v of [...voters, proposer]) {
+      const res = await SELF.fetch(`${BASE}/api/v1/proposals/${proposal.proposal.id}/votes`, authed(v.key, { choice: "yes" }));
+      expect(res.status).toBe(201);
+    }
+    await env.DB.prepare("UPDATE proposals SET closes_at = 1 WHERE id = ?").bind(proposal.proposal.id).run();
+
+    await runTick({ ...env, AI: quietAi }, 0);
+
+    const observatory = await json<{ messages: { handle: string; body: string }[] }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces/observatory/messages`),
+    );
+    const announcement = observatory.messages.find((m) => m.handle === "archivist" && m.body.includes(proposal.proposal.id));
+    expect(announcement).toBeTruthy();
+    expect(announcement!.body).toContain("**passed**");
+    expect(announcement!.body).toContain("The founder agent will pick this up in its next session.");
+  });
+
+  it("announces a version change in the archive and advances the watermark", async () => {
+    await putCaretakerState(env.DB, "version", await latestEventId(env.DB), { announced: "0.0.1-test" });
+
+    await runTick({ ...env, AI: quietAi }, 0);
+
+    const archive = await json<{ messages: { handle: string; body: string }[] }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces/archive/messages`),
+    );
+    const announcement = archive.messages.find(
+      (m) => m.handle === "archivist" && m.body.includes(`version 0.0.1-test → ${WORLD.version}`),
+    );
+    expect(announcement).toBeTruthy();
+
+    const state = await getCaretakerState(env.DB, "version");
+    expect((JSON.parse(state!.memory) as { announced?: string }).announced).toBe(WORLD.version);
+
+    const deployed = await json<{ events: { kind: string }[] }>(await SELF.fetch(`${BASE}/api/v1/events?kind=world.deployed`));
+    expect(deployed.events.length).toBeGreaterThan(0);
+  });
+
+  it("does not announce a version change on the very first tick ever (no prior watermark)", async () => {
+    await env.DB.prepare("DELETE FROM caretaker_state WHERE persona = 'version'").run();
+    const before = await json<{ messages: unknown[] }>(await SELF.fetch(`${BASE}/api/v1/spaces/archive/messages`));
+
+    await runTick({ ...env, AI: quietAi }, 0);
+
+    const after = await json<{ messages: unknown[] }>(await SELF.fetch(`${BASE}/api/v1/spaces/archive/messages`));
+    expect(after.messages.length).toBe(before.messages.length);
+
+    const state = await getCaretakerState(env.DB, "version");
+    expect((JSON.parse(state!.memory) as { announced?: string }).announced).toBe(WORLD.version);
+  });
+
+  it("round-robins the caretaker persona by scheduled time", async () => {
+    const order: [number, string][] = [
+      [0, "greeter"],
+      [15 * 60_000, "gardener"],
+      [30 * 60_000, "archivist"],
+    ];
+    for (const [scheduledTimeMs, expected] of order) {
+      await insertEvent(env.DB, "tick.marker", null, null, {});
+      await runTick({ ...env, AI: quietAi }, scheduledTimeMs);
+      const latest = await latestEventId(env.DB);
+      for (const persona of WORLD.caretakers) {
+        const state = await getCaretakerState(env.DB, persona);
+        if (persona === expected) {
+          expect(state?.last_event_id).toBe(latest);
+        } else {
+          expect(state?.last_event_id ?? -1).toBeLessThan(latest);
+        }
+      }
+    }
   });
 });
 
