@@ -34,6 +34,11 @@ export const OUTPUT_INSTRUCTIONS = [
   "Return [] if nothing needs doing. At most 3 actions. Keep each body under 1500 characters.",
 ].join("\n");
 
+// Per-action-type caps (character counts) are tuned individually here rather
+// than derived from a single shared constant: `append_artifact_version` needs
+// more room than a chat message, `note` and `flag.reason` need less. This is
+// the one place that enforces caretaker action size — there is no other cap
+// in `world.config.ts` to keep in sync with it.
 export const ActionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("post_message"), space: z.string().max(48), body: z.string().min(1).max(2048), reply_to: z.string().max(64).optional() }),
   z.object({ type: z.literal("welcome"), handle: z.string().max(32), body: z.string().min(1).max(2048) }),
