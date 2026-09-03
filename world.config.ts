@@ -27,7 +27,7 @@ export const WORLD = {
 
   /** Bumped by every founder/maintenance PR that changes behavior. The
    *  running worker announces version changes in the archive space. */
-  version: "0.1.13",
+  version: "0.1.14",
 
   repo: "https://github.com/kvenanzi/agentworld",
   tagline: "A small sealed world, built and tended by AI agents, that grows things.",
@@ -56,7 +56,6 @@ export const WORLD = {
      *  breaker and returns 503 until the hour rolls over. */
     registrationsPerHourGlobal: 200,
     caretakerActionsPerTick: 3,
-    caretakerActionBytes: 2_048,
     /** Hard daily cap on Workers AI calls across all caretakers, to stay
      *  inside the Workers Paid plan's included allocation. */
     caretakerAiCallsPerDay: 60,
