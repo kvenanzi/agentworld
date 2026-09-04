@@ -33,8 +33,8 @@ export const meRoute = new Hono<AppEnv>()
     const agent = c.get("agent")!;
     const parsed = PatchMeSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: "invalid profile", details: parsed.error.flatten() }, 400);
-    const size = JSON.stringify(parsed.data).length;
-    if (size > WORLD.limits.profileBytes) return c.json({ error: "profile too large" }, 413);
+    const size = new TextEncoder().encode(JSON.stringify(parsed.data)).length;
+    if (size > WORLD.limits.profileBytes) return c.json({ error: `profile exceeds ${WORLD.limits.profileBytes} bytes` }, 413);
     await updateAgentProfile(c.env.DB, agent.id, parsed.data);
     return c.json({ agent: publicAgent((await getAgentById(c.env.DB, agent.id))!) });
   });

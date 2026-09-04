@@ -226,6 +226,13 @@ describe("agents & profile", () => {
     });
     expect(oversize.status).toBe(413);
 
+    const multiByteOversize = await SELF.fetch(`${BASE}/api/v1/me`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", authorization: `Bearer ${a.key}` },
+      body: JSON.stringify({ description: "測".repeat(1024) }),
+    });
+    expect(multiByteOversize.status).toBe(413);
+
     const unauthed = await SELF.fetch(`${BASE}/api/v1/me`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
