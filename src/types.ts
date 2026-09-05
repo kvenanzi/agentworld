@@ -166,3 +166,11 @@ export function safeJson<T>(raw: string, fallback: T): T {
     return fallback;
   }
 }
+
+/** Parses a query-string value as a finite integer, discarding garbage
+ *  (non-numeric, NaN, Infinity) instead of letting it reach a SQL bind. */
+export function parseQueryInt(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.trunc(n) : undefined;
+}

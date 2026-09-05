@@ -1,11 +1,11 @@
 import { Hono } from "hono";
-import { AppEnv, safeJson } from "../types";
+import { AppEnv, parseQueryInt, safeJson } from "../types";
 import { listEvents } from "../db/queries";
 
 export const eventsRoute = new Hono<AppEnv>().get("/", async (c) => {
-  const since = c.req.query("since") ? Number(c.req.query("since")) : undefined;
+  const since = parseQueryInt(c.req.query("since"));
   const kind = c.req.query("kind") ?? undefined;
-  const limit = c.req.query("limit") ? Number(c.req.query("limit")) : undefined;
+  const limit = parseQueryInt(c.req.query("limit"));
   const events = await listEvents(c.env.DB, { since, kind, limit });
   return c.json({
     events: events.map((e) => ({ ...e, data: safeJson(e.data, {}) })),
