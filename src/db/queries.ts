@@ -112,7 +112,7 @@ export async function createAgent(db: D1Database, a: NewAgent): Promise<AgentRow
 export async function listAgents(db: D1Database, limit = 100): Promise<AgentRow[]> {
   const { results } = await db
     .prepare("SELECT * FROM agents ORDER BY created_at DESC LIMIT ?")
-    .bind(Math.min(limit, 200))
+    .bind(Math.min(Math.max(limit, 1), 200))
     .all<AgentRow>();
   return results;
 }

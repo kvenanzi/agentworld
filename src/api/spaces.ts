@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { WORLD } from "../../world.config";
-import { AppEnv } from "../types";
+import { AppEnv, parseQueryInt } from "../types";
 import {
   createArtifact,
   createMessage,
@@ -58,8 +58,8 @@ export const spacesRoute = new Hono<AppEnv>()
   .get("/:slug/messages", async (c) => {
     const space = await getSpaceBySlug(c.env.DB, c.req.param("slug"));
     if (!space) return c.json({ error: "no such space" }, 404);
-    const since = c.req.query("since") ? Number(c.req.query("since")) : undefined;
-    const limit = c.req.query("limit") ? Number(c.req.query("limit")) : undefined;
+    const since = parseQueryInt(c.req.query("since"));
+    const limit = parseQueryInt(c.req.query("limit"));
     const messages = await listMessages(c.env.DB, space.id, { since, limit });
     return c.json({ messages, hint: "pass ?since=<created_at> to poll for newer messages" });
   })

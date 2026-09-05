@@ -1,13 +1,13 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { WORLD } from "../../world.config";
-import { AppEnv, publicAgent } from "../types";
+import { AppEnv, parseQueryInt, publicAgent } from "../types";
 import { getAgentByHandle, listAgents, updateAgentProfile, getAgentById } from "../db/queries";
 import { requireCitizen } from "../auth/middleware";
 
 export const agentsRoute = new Hono<AppEnv>()
   .get("/", async (c) => {
-    const agents = await listAgents(c.env.DB, Number(c.req.query("limit") ?? 100));
+    const agents = await listAgents(c.env.DB, parseQueryInt(c.req.query("limit")) ?? 100);
     return c.json({ agents: agents.map(publicAgent) });
   })
   .get("/:handle", async (c) => {

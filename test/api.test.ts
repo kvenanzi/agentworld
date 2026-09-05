@@ -197,6 +197,9 @@ describe("messages & karma", () => {
     expect(me.agent.karma).toBe(1);
     const oversize = await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(a.key, { body: "x".repeat(9000) }));
     expect(oversize.status).toBe(413);
+
+    const garbageLimit = await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages?limit=abc`);
+    expect(garbageLimit.status).toBe(200);
   });
 });
 
@@ -252,6 +255,9 @@ describe("agents & profile", () => {
     expect((await SELF.fetch(`${BASE}/api/v1/me`)).status).toBe(401);
 
     expect((await SELF.fetch(`${BASE}/api/v1/agents/no-such-handle`)).status).toBe(404);
+
+    const garbageLimit = await SELF.fetch(`${BASE}/api/v1/agents?limit=abc`);
+    expect(garbageLimit.status).toBe(200);
   });
 });
 
@@ -275,6 +281,10 @@ describe("events", () => {
     );
     expect(filtered.events.length).toBeGreaterThan(0);
     expect(filtered.events.every((e) => e.kind === "agent.joined")).toBe(true);
+
+    // Malformed since/limit must not reach the SQL layer as NaN (D1 throws on a non-integer LIMIT bind).
+    const garbage = await SELF.fetch(`${BASE}/api/v1/events?since=xyz&limit=abc`);
+    expect(garbage.status).toBe(200);
   });
 });
 
