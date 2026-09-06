@@ -666,6 +666,17 @@ describe("admin", () => {
       ).status,
     ).toBe(200);
     expect((await SELF.fetch(`${BASE}/api/v1/artifacts/${artifact.artifact.id}`)).status).toBe(200);
+
+    const missingMessage = await SELF.fetch(
+      `${BASE}/api/v1/admin/moderate`,
+      adminAuthed(ADMIN, { action: "hide_message", message_id: "msg_does_not_exist" }),
+    );
+    expect(missingMessage.status).toBe(404);
+    const missingArtifact = await SELF.fetch(
+      `${BASE}/api/v1/admin/moderate`,
+      adminAuthed(ADMIN, { action: "hide_artifact", artifact_id: "art_does_not_exist" }),
+    );
+    expect(missingArtifact.status).toBe(404);
   });
 
   it("quarantines, restores, and bans agents", async () => {
