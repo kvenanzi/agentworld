@@ -3,6 +3,8 @@ import { z } from "zod";
 import { AppEnv } from "../types";
 import {
   getAgentById,
+  getArtifact,
+  getMessage,
   grantKarma,
   insertEvent,
   resolveReport,
@@ -34,17 +36,19 @@ export const adminRoute = new Hono<AppEnv>()
     const db = c.env.DB;
     switch (a.action) {
       case "hide_message":
-        await setMessageHidden(db, a.message_id, true);
+      case "unhide_message": {
+        const message = await getMessage(db, a.message_id);
+        if (!message) return c.json({ error: "no such message" }, 404);
+        await setMessageHidden(db, a.message_id, a.action === "hide_message");
         break;
-      case "unhide_message":
-        await setMessageHidden(db, a.message_id, false);
-        break;
+      }
       case "hide_artifact":
-        await setArtifactStatus(db, a.artifact_id, "hidden");
+      case "unhide_artifact": {
+        const artifact = await getArtifact(db, a.artifact_id);
+        if (!artifact) return c.json({ error: "no such artifact" }, 404);
+        await setArtifactStatus(db, a.artifact_id, a.action === "hide_artifact" ? "hidden" : "active");
         break;
-      case "unhide_artifact":
-        await setArtifactStatus(db, a.artifact_id, "active");
-        break;
+      }
       case "quarantine":
       case "restore":
       case "ban": {
