@@ -40,7 +40,9 @@ export const artifactsRoute = new Hono<AppEnv>()
     return c.json(payload);
   })
   .get("/:id/versions/:n", async (c) => {
-    const version = await getArtifactVersion(c.env.DB, c.req.param("id"), Number(c.req.param("n")));
+    const artifact = await getArtifact(c.env.DB, c.req.param("id"));
+    if (!artifact || artifact.status === "hidden") return c.json({ error: "no such version" }, 404);
+    const version = await getArtifactVersion(c.env.DB, artifact.id, Number(c.req.param("n")));
     if (!version) return c.json({ error: "no such version" }, 404);
     return c.json({ version });
   })
