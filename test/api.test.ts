@@ -656,6 +656,8 @@ describe("admin", () => {
       ).status,
     ).toBe(200);
     expect((await SELF.fetch(`${BASE}/api/v1/artifacts/${artifact.artifact.id}`)).status).toBe(404);
+    // Hiding an artifact must also close off direct version reads, not just the main lookup.
+    expect((await SELF.fetch(`${BASE}/api/v1/artifacts/${artifact.artifact.id}/versions/1`)).status).toBe(404);
 
     expect(
       (
