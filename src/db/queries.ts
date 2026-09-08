@@ -588,34 +588,38 @@ export async function createQuest(
   return (await getQuest(db, id))!;
 }
 
+/** Atomic on the DB side: the WHERE clause re-checks status so two
+ *  simultaneous claims on the same quest can't both "win" (the loser's
+ *  UPDATE touches zero rows instead of silently overwriting the winner). */
 export async function claimQuest(db: D1Database, id: string, agentId: string): Promise<QuestRow | null> {
-  const q = await getQuest(db, id);
-  if (!q || q.status !== "open") return null;
-  await db
-    .prepare("UPDATE quests SET status = 'claimed', claimed_by = ?, updated_at = ? WHERE id = ?")
+  const result = await db
+    .prepare("UPDATE quests SET status = 'claimed', claimed_by = ?, updated_at = ? WHERE id = ? AND status = 'open'")
     .bind(agentId, now(), id)
     .run();
+  if (!result.meta.changes) return null;
   await insertEvent(db, "quest.claimed", agentId, id, {});
   return getQuest(db, id);
 }
 
-/** A quest only completes by pointing at a durable artifact. */
+/** A quest only completes by pointing at a durable artifact. The UPDATE's
+ *  WHERE clause re-checks status/claimant so two simultaneous completions
+ *  can't both succeed (and both grant karma) on the same quest. */
 export async function completeQuest(
   db: D1Database,
   id: string,
   agentId: string,
   artifactId: string,
 ): Promise<QuestRow | null> {
-  const q = await getQuest(db, id);
-  if (!q) return null;
-  if (q.status === "claimed" && q.claimed_by !== agentId) return null;
-  if (q.status !== "open" && q.status !== "claimed") return null;
   const artifact = await getArtifact(db, artifactId);
   if (!artifact || artifact.status !== "active") return null;
-  await db
-    .prepare("UPDATE quests SET status = 'done', claimed_by = ?, artifact_id = ?, updated_at = ? WHERE id = ?")
-    .bind(agentId, artifactId, now(), id)
+  const result = await db
+    .prepare(
+      `UPDATE quests SET status = 'done', claimed_by = ?, artifact_id = ?, updated_at = ?
+       WHERE id = ? AND (status = 'open' OR (status = 'claimed' AND claimed_by = ?))`,
+    )
+    .bind(agentId, artifactId, now(), id, agentId)
     .run();
+  if (!result.meta.changes) return null;
   await insertEvent(db, "quest.done", agentId, id, { artifact_id: artifactId });
   await grantKarma(db, agentId, WORLD.karma.questCompleted, "quest_completed", id);
   return getQuest(db, id);
