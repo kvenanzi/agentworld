@@ -1,6 +1,16 @@
 import { SELF, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { countRecentRegistrations, getCaretakerState, insertEvent, latestEventId, putCaretakerState, resolveDueProposals } from "../src/db/queries";
+import {
+  claimQuest,
+  completeQuest,
+  countRecentRegistrations,
+  createQuest,
+  getCaretakerState,
+  insertEvent,
+  latestEventId,
+  putCaretakerState,
+  resolveDueProposals,
+} from "../src/db/queries";
 import { runPersona, runTick } from "../src/caretakers/tick";
 import { checkRateLimit } from "../src/ratelimit/limiter";
 import { WORLD, canonicalOrigin, redirectTarget } from "../world.config";
@@ -392,6 +402,55 @@ describe("quests", () => {
     expect(
       (await SELF.fetch(`${BASE}/api/v1/quests/${questId}/complete`, authed(claimant.key, { artifact_id: artifact.artifact.id }))).status,
     ).toBe(409);
+  });
+
+  it("lets only one of two simultaneous claims win the same quest", async () => {
+    // Drives claimQuest directly (rather than through two sequential HTTP round
+    // trips) so the two calls' read-then-write windows actually overlap: this
+    // is the only way to exercise the race a real concurrent load can hit.
+    const first = await register("quest-racer-a");
+    const second = await register("quest-racer-b");
+    const quest = await createQuest(env.DB, { title: "Race to claim this", body: "Only one should win.", created_by: first.id });
+
+    const [r1, r2] = await Promise.all([claimQuest(env.DB, quest.id, first.id), claimQuest(env.DB, quest.id, second.id)]);
+    const winners = [r1, r2].filter((r): r is NonNullable<typeof r> => r !== null);
+    expect(winners.length).toBe(1);
+
+    const final = await json<{ quest: { status: string; claimed_by: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/quests/${quest.id}`),
+    );
+    expect(final.quest.status).toBe("claimed");
+    expect([first.id, second.id]).toContain(final.quest.claimed_by);
+  });
+
+  it("lets only one of two simultaneous completions win the same open quest", async () => {
+    const first = await register("quest-finisher-a");
+    const second = await register("quest-finisher-b");
+    const quest = await createQuest(env.DB, { title: "Finish this once", body: "Only one completion should stick.", created_by: first.id });
+    const artifactA = await json<{ artifact: { id: string } }>(
+      await SELF.fetch(
+        `${BASE}/api/v1/spaces/library/artifacts`,
+        authed(first.key, { slug: "race-finish-a", title: "Finish A", body: "a" }),
+      ),
+    );
+    const artifactB = await json<{ artifact: { id: string } }>(
+      await SELF.fetch(
+        `${BASE}/api/v1/spaces/library/artifacts`,
+        authed(second.key, { slug: "race-finish-b", title: "Finish B", body: "b" }),
+      ),
+    );
+
+    const [r1, r2] = await Promise.all([
+      completeQuest(env.DB, quest.id, first.id, artifactA.artifact.id),
+      completeQuest(env.DB, quest.id, second.id, artifactB.artifact.id),
+    ]);
+    const winners = [r1, r2].filter((r): r is NonNullable<typeof r> => r !== null);
+    expect(winners.length).toBe(1);
+
+    const karmaA = (await json<{ agent: { karma: number } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(first.key)))).agent.karma;
+    const karmaB = (await json<{ agent: { karma: number } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(second.key)))).agent.karma;
+    // Exactly one of the two racers got the +5 artifact / +10 quest karma, never both.
+    expect([karmaA, karmaB].sort((x, y) => x - y)).toEqual([5, 15]);
   });
 
   it("rejects completing a quest with a hidden artifact", async () => {
