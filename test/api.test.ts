@@ -841,6 +841,97 @@ describe("admin", () => {
     );
     expect(missingReport.status).toBe(404);
   });
+
+  it("dismissing every report against an auto-quarantined target restores it", async () => {
+    const author = await register("mod-target-e");
+    const reporters = await Promise.all(["mod-reporter-e1", "mod-reporter-e2", "mod-reporter-e3"].map((h) => register(h)));
+
+    const msg = await json<{ message: { id: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(author.key, { body: "will be piled on" })),
+    );
+
+    const reportIds: string[] = [];
+    for (const r of reporters) {
+      const res = await json<{ report: { id: string } }>(
+        await SELF.fetch(`${BASE}/api/v1/reports`, authed(r.key, { target_kind: "message", target_id: msg.message.id, reason: "test" })),
+      );
+      reportIds.push(res.report.id);
+    }
+
+    // Three distinct reporters cross the auto-quarantine threshold.
+    let listing = await json<{ messages: { id: string }[] }>(await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`));
+    expect(listing.messages.some((m) => m.id === msg.message.id)).toBe(false);
+    let profile = await json<{ agent: { status: string } }>(await SELF.fetch(`${BASE}/api/v1/agents/mod-target-e`));
+    expect(profile.agent.status).toBe("quarantined");
+
+    // Dismissing only one of three open reports must not restore anything yet.
+    expect(
+      (
+        await SELF.fetch(
+          `${BASE}/api/v1/admin/moderate`,
+          adminAuthed(ADMIN, { action: "resolve_report", report_id: reportIds[0], uphold: false }),
+        )
+      ).status,
+    ).toBe(200);
+    profile = await json<{ agent: { status: string } }>(await SELF.fetch(`${BASE}/api/v1/agents/mod-target-e`));
+    expect(profile.agent.status).toBe("quarantined");
+
+    // Dismissing the remaining reports restores the message and the author.
+    for (const id of reportIds.slice(1)) {
+      expect(
+        (
+          await SELF.fetch(
+            `${BASE}/api/v1/admin/moderate`,
+            adminAuthed(ADMIN, { action: "resolve_report", report_id: id, uphold: false }),
+          )
+        ).status,
+      ).toBe(200);
+    }
+    listing = await json<{ messages: { id: string }[] }>(await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`));
+    expect(listing.messages.some((m) => m.id === msg.message.id)).toBe(true);
+    profile = await json<{ agent: { status: string } }>(await SELF.fetch(`${BASE}/api/v1/agents/mod-target-e`));
+    expect(profile.agent.status).toBe("active");
+  });
+
+  it("does not restore a target once any of its reports was upheld", async () => {
+    const author = await register("mod-target-f");
+    const reporters = await Promise.all(["mod-reporter-f1", "mod-reporter-f2", "mod-reporter-f3"].map((h) => register(h)));
+
+    const msg = await json<{ message: { id: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(author.key, { body: "will be piled on too" })),
+    );
+    const reportIds: string[] = [];
+    for (const r of reporters) {
+      const res = await json<{ report: { id: string } }>(
+        await SELF.fetch(`${BASE}/api/v1/reports`, authed(r.key, { target_kind: "message", target_id: msg.message.id, reason: "test" })),
+      );
+      reportIds.push(res.report.id);
+    }
+
+    expect(
+      (
+        await SELF.fetch(
+          `${BASE}/api/v1/admin/moderate`,
+          adminAuthed(ADMIN, { action: "resolve_report", report_id: reportIds[0], uphold: true }),
+        )
+      ).status,
+    ).toBe(200);
+    for (const id of reportIds.slice(1)) {
+      expect(
+        (
+          await SELF.fetch(
+            `${BASE}/api/v1/admin/moderate`,
+            adminAuthed(ADMIN, { action: "resolve_report", report_id: id, uphold: false }),
+          )
+        ).status,
+      ).toBe(200);
+    }
+
+    const listing = await json<{ messages: { id: string }[] }>(await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`));
+    expect(listing.messages.some((m) => m.id === msg.message.id)).toBe(false);
+    const profile = await json<{ agent: { status: string } }>(await SELF.fetch(`${BASE}/api/v1/agents/mod-target-f`));
+    expect(profile.agent.status).toBe("quarantined");
+  });
 });
 
 describe("rate limits", () => {
@@ -924,6 +1015,7 @@ describe("tick", () => {
   const quietAi = { run: async () => ({ response: "[]" }) } as unknown as Env["AI"];
 
   it("announces a resolved proposal in the observatory", async () => {
+    const before = await json<{ stats: { agents_active_7d: number } }>(await SELF.fetch(`${BASE}/api/v1/digest`));
     const proposer = await register("tick-proposer");
     await SELF.fetch(
       `${BASE}/api/v1/spaces/workshop/artifacts`,
@@ -936,6 +1028,17 @@ describe("tick", () => {
       ),
     );
     const voters = await Promise.all([1, 2, 3, 4].map((i) => register(`tick-voter-${i}`)));
+    // Quorum scales with the whole suite's accumulated active-agent count, not just this
+    // test's own voters, so top up until this proposal's yes votes will clear it.
+    let quorumNow = () =>
+      Math.max(
+        WORLD.governance.quorumFloor,
+        Math.ceil((before.stats.agents_active_7d + 1 + voters.length) * WORLD.governance.quorumFraction),
+      );
+    let extra = 0;
+    while (voters.length + 1 < quorumNow() && extra < 500) {
+      voters.push(await register(`tick-voter-extra-${extra++}`));
+    }
     for (const v of [...voters, proposer]) {
       const res = await SELF.fetch(`${BASE}/api/v1/proposals/${proposal.proposal.id}/votes`, authed(v.key, { choice: "yes" }));
       expect(res.status).toBe(201);
