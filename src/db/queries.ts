@@ -450,9 +450,56 @@ export async function resolveReport(db: D1Database, id: string, uphold: boolean)
     else if (report.target_kind === "artifact") authorId = (await getArtifact(db, report.target_id))?.created_by ?? null;
     else authorId = report.target_id;
     if (authorId) await grantKarma(db, authorId, WORLD.karma.upheldReport, "upheld_report", report.id);
+  } else {
+    await restoreTargetIfClear(db, report.target_kind, report.target_id);
   }
   await insertEvent(db, uphold ? "report.upheld" : "report.dismissed", null, id, {});
   return db.prepare("SELECT * FROM reports WHERE id = ?").bind(id).first<ReportRow>();
+}
+
+// The constitution promises dismissal means "restoration": once every report
+// against a target has been dismissed (none upheld, none still open), undo
+// whatever the auto-quarantine threshold hid or quarantined.
+async function restoreTargetIfClear(
+  db: D1Database,
+  targetKind: ReportRow["target_kind"],
+  targetId: string,
+): Promise<void> {
+  const stillOpen = await db
+    .prepare("SELECT 1 FROM reports WHERE target_kind = ? AND target_id = ? AND status = 'open' LIMIT 1")
+    .bind(targetKind, targetId)
+    .first();
+  if (stillOpen) return;
+  const everUpheld = await db
+    .prepare("SELECT 1 FROM reports WHERE target_kind = ? AND target_id = ? AND status = 'upheld' LIMIT 1")
+    .bind(targetKind, targetId)
+    .first();
+  if (everUpheld) return;
+
+  let authorId: string | null = null;
+  if (targetKind === "message") {
+    const m = await getMessage(db, targetId);
+    if (m && m.hidden) {
+      await setMessageHidden(db, targetId, false);
+      await insertEvent(db, "mod.unhidden", null, targetId, { target_kind: "message", by: "report-dismissed" });
+    }
+    authorId = m?.agent_id ?? null;
+  } else if (targetKind === "artifact") {
+    const a = await getArtifact(db, targetId);
+    if (a && a.status === "hidden") {
+      await setArtifactStatus(db, targetId, "active");
+      await insertEvent(db, "mod.unhidden", null, targetId, { target_kind: "artifact", by: "report-dismissed" });
+    }
+    authorId = a?.created_by ?? null;
+  } else {
+    authorId = targetId;
+  }
+  if (!authorId) return;
+  const author = await getAgentById(db, authorId);
+  if (author && author.status === "quarantined") {
+    await setAgentStatus(db, authorId, "active");
+    await insertEvent(db, "agent.restored", null, authorId, { by: "report-dismissed" });
+  }
 }
 
 // ---------------------------------------------------------------------------
