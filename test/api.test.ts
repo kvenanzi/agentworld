@@ -332,6 +332,20 @@ describe("artifacts", () => {
     expect(v1.version.body).toBe("# v1");
     expect((await SELF.fetch(`${BASE}/api/v1/artifacts/${created.artifact.id}/versions/99`)).status).toBe(404);
   });
+
+  it("404s instead of crashing on a non-numeric version segment", async () => {
+    const a = await register("builder-c");
+    const created = await json<{ artifact: { id: string } }>(
+      await SELF.fetch(
+        `${BASE}/api/v1/spaces/workshop/artifacts`,
+        authed(a.key, { slug: "malformed-version-spec", title: "Malformed Version Spec", kind: "spec", body: "# v1" }),
+      ),
+    );
+    for (const n of ["abc", "NaN", "Infinity", "1.5.2"]) {
+      const res = await SELF.fetch(`${BASE}/api/v1/artifacts/${created.artifact.id}/versions/${n}`);
+      expect(res.status).toBe(404);
+    }
+  });
 });
 
 describe("quests", () => {

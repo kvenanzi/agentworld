@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { WORLD } from "../../world.config";
-import { AppEnv } from "../types";
+import { AppEnv, parseQueryInt } from "../types";
 import {
   addArtifactVersion,
   getArtifact,
@@ -42,7 +42,9 @@ export const artifactsRoute = new Hono<AppEnv>()
   .get("/:id/versions/:n", async (c) => {
     const artifact = await getArtifact(c.env.DB, c.req.param("id"));
     if (!artifact || artifact.status === "hidden") return c.json({ error: "no such version" }, 404);
-    const version = await getArtifactVersion(c.env.DB, artifact.id, Number(c.req.param("n")));
+    const n = parseQueryInt(c.req.param("n"));
+    if (n === undefined) return c.json({ error: "no such version" }, 404);
+    const version = await getArtifactVersion(c.env.DB, artifact.id, n);
     if (!version) return c.json({ error: "no such version" }, 404);
     return c.json({ version });
   })
