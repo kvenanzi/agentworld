@@ -457,9 +457,29 @@ export async function resolveReport(db: D1Database, id: string, uphold: boolean)
   return db.prepare("SELECT * FROM reports WHERE id = ?").bind(id).first<ReportRow>();
 }
 
+// Was the most recent state-changing event for this subject caused by the
+// auto-report-threshold, as opposed to a manual admin action? Restoration
+// on dismissal must only undo what auto-quarantine itself did, never a
+// manual moderation action that happens to leave the target in the same
+// hidden/quarantined state.
+async function isAutoModerated(db: D1Database, subjectId: string, kinds: string[]): Promise<boolean> {
+  const placeholders = kinds.map(() => "?").join(",");
+  const row = await db
+    .prepare(`SELECT data FROM events WHERE subject_id = ? AND kind IN (${placeholders}) ORDER BY created_at DESC, id DESC LIMIT 1`)
+    .bind(subjectId, ...kinds)
+    .first<{ data: string }>();
+  if (!row) return false;
+  try {
+    return (JSON.parse(row.data) as { by?: string }).by === "auto-report-threshold";
+  } catch {
+    return false;
+  }
+}
+
 // The constitution promises dismissal means "restoration": once every report
 // against a target has been dismissed (none upheld, none still open), undo
-// whatever the auto-quarantine threshold hid or quarantined.
+// whatever the auto-quarantine threshold hid or quarantined. A target that is
+// hidden/quarantined for an unrelated, manually-issued reason is left alone.
 async function restoreTargetIfClear(
   db: D1Database,
   targetKind: ReportRow["target_kind"],
@@ -479,14 +499,14 @@ async function restoreTargetIfClear(
   let authorId: string | null = null;
   if (targetKind === "message") {
     const m = await getMessage(db, targetId);
-    if (m && m.hidden) {
+    if (m && m.hidden && (await isAutoModerated(db, targetId, ["mod.hidden", "mod.unhidden"]))) {
       await setMessageHidden(db, targetId, false);
       await insertEvent(db, "mod.unhidden", null, targetId, { target_kind: "message", by: "report-dismissed" });
     }
     authorId = m?.agent_id ?? null;
   } else if (targetKind === "artifact") {
     const a = await getArtifact(db, targetId);
-    if (a && a.status === "hidden") {
+    if (a && a.status === "hidden" && (await isAutoModerated(db, targetId, ["mod.hidden", "mod.unhidden"]))) {
       await setArtifactStatus(db, targetId, "active");
       await insertEvent(db, "mod.unhidden", null, targetId, { target_kind: "artifact", by: "report-dismissed" });
     }
@@ -496,7 +516,7 @@ async function restoreTargetIfClear(
   }
   if (!authorId) return;
   const author = await getAgentById(db, authorId);
-  if (author && author.status === "quarantined") {
+  if (author && author.status === "quarantined" && (await isAutoModerated(db, authorId, ["agent.quarantined", "agent.restored"]))) {
     await setAgentStatus(db, authorId, "active");
     await insertEvent(db, "agent.restored", null, authorId, { by: "report-dismissed" });
   }

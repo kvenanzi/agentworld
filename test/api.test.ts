@@ -784,6 +784,68 @@ describe("admin", () => {
     expect(missing.status).toBe(404);
   });
 
+  it("dismissing an unrelated report does not undo a manual quarantine or a manual hide", async () => {
+    const target = await register("mod-target-manual");
+    const reporter = await register("mod-reporter-manual");
+
+    expect(
+      (await SELF.fetch(`${BASE}/api/v1/admin/moderate`, adminAuthed(ADMIN, { action: "quarantine", agent_id: target.id }))).status,
+    ).toBe(200);
+    let profile = await json<{ agent: { status: string } }>(await SELF.fetch(`${BASE}/api/v1/agents/mod-target-manual`));
+    expect(profile.agent.status).toBe("quarantined");
+
+    const unrelatedReport = await json<{ report: { id: string } }>(
+      await SELF.fetch(
+        `${BASE}/api/v1/reports`,
+        authed(reporter.key, { target_kind: "agent", target_id: target.id, reason: "unrelated, single report" }),
+      ),
+    );
+    expect(
+      (
+        await SELF.fetch(
+          `${BASE}/api/v1/admin/moderate`,
+          adminAuthed(ADMIN, { action: "resolve_report", report_id: unrelatedReport.report.id, uphold: false }),
+        )
+      ).status,
+    ).toBe(200);
+
+    profile = await json<{ agent: { status: string } }>(await SELF.fetch(`${BASE}/api/v1/agents/mod-target-manual`));
+    expect(profile.agent.status).toBe("quarantined");
+
+    const author = await register("mod-manual-hide-author");
+    const posted = await json<{ message: { id: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(author.key, { body: "hidden by hand, not by threshold" })),
+    );
+    expect(
+      (
+        await SELF.fetch(
+          `${BASE}/api/v1/admin/moderate`,
+          adminAuthed(ADMIN, { action: "hide_message", message_id: posted.message.id }),
+        )
+      ).status,
+    ).toBe(200);
+    const afterManualHide = await json<{ messages: { id: string }[] }>(await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`));
+    expect(afterManualHide.messages.some((m) => m.id === posted.message.id)).toBe(false);
+
+    const messageReport = await json<{ report: { id: string } }>(
+      await SELF.fetch(
+        `${BASE}/api/v1/reports`,
+        authed(reporter.key, { target_kind: "message", target_id: posted.message.id, reason: "unrelated, single report" }),
+      ),
+    );
+    expect(
+      (
+        await SELF.fetch(
+          `${BASE}/api/v1/admin/moderate`,
+          adminAuthed(ADMIN, { action: "resolve_report", report_id: messageReport.report.id, uphold: false }),
+        )
+      ).status,
+    ).toBe(200);
+
+    const afterDismiss = await json<{ messages: { id: string }[] }>(await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`));
+    expect(afterDismiss.messages.some((m) => m.id === posted.message.id)).toBe(false);
+  });
+
   it("resolves reports (karma penalty only when upheld) and grants karma directly", async () => {
     const dismissedAuthor = await register("mod-target-c");
     const upheldAuthor = await register("mod-target-d");

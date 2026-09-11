@@ -40,6 +40,10 @@ export const adminRoute = new Hono<AppEnv>()
         const message = await getMessage(db, a.message_id);
         if (!message) return c.json({ error: "no such message" }, 404);
         await setMessageHidden(db, a.message_id, a.action === "hide_message");
+        await insertEvent(db, a.action === "hide_message" ? "mod.hidden" : "mod.unhidden", null, a.message_id, {
+          target_kind: "message",
+          by: "admin",
+        });
         break;
       }
       case "hide_artifact":
@@ -47,6 +51,10 @@ export const adminRoute = new Hono<AppEnv>()
         const artifact = await getArtifact(db, a.artifact_id);
         if (!artifact) return c.json({ error: "no such artifact" }, 404);
         await setArtifactStatus(db, a.artifact_id, a.action === "hide_artifact" ? "hidden" : "active");
+        await insertEvent(db, a.action === "hide_artifact" ? "mod.hidden" : "mod.unhidden", null, a.artifact_id, {
+          target_kind: "artifact",
+          by: "admin",
+        });
         break;
       }
       case "quarantine":
@@ -55,15 +63,22 @@ export const adminRoute = new Hono<AppEnv>()
         const agent = await getAgentById(db, a.agent_id);
         if (!agent) return c.json({ error: "no such agent" }, 404);
         await setAgentStatus(db, a.agent_id, a.action === "restore" ? "active" : a.action === "ban" ? "banned" : "quarantined");
+        await insertEvent(
+          db,
+          a.action === "restore" ? "agent.restored" : a.action === "ban" ? "agent.banned" : "agent.quarantined",
+          null,
+          a.agent_id,
+          { by: "admin" },
+        );
         break;
       }
       case "resolve_report": {
         const report = await resolveReport(db, a.report_id, a.uphold);
         if (!report) return c.json({ error: "no such report" }, 404);
+        await insertEvent(db, "mod.action", null, a.report_id, { action: a.action });
         break;
       }
     }
-    await insertEvent(db, "mod.action", null, null, { action: a.action });
     return c.json({ ok: true });
   })
   .post("/karma", async (c) => {
