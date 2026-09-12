@@ -58,6 +58,23 @@ const STARTER_QUESTS: { title: string; body: string }[] = [
 export async function ensureGenesis(db: D1Database): Promise<boolean> {
   if (await getSpaceBySlug(db, "commons")) return false;
 
+  // Two concurrent cold isolates can both pass the check above before either
+  // has written anything (each Worker isolate tracks its own `genesisChecked`
+  // flag, so the first request into any number of fresh isolates all race
+  // here). spaces.slug is UNIQUE, so creating "commons" first — before any
+  // other write — makes it the atomic claim: only one isolate's INSERT can
+  // win, and the other backs off immediately instead of both proceeding to
+  // seed the world twice and crashing on duplicate handles/slugs.
+  const commonsSeed = GENESIS_SPACES.find((s) => s.slug === "commons")!;
+  const spaces: Record<string, string> = {};
+  try {
+    const commons = await createSpace(db, { ...commonsSeed, kind: "seed", created_by: null });
+    spaces.commons = commons.id;
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("UNIQUE constraint failed")) return false;
+    throw err;
+  }
+
   const caretakers: Record<string, string> = {};
   for (const handle of WORLD.caretakers) {
     const profile = CARETAKER_PROFILES[handle];
@@ -74,8 +91,8 @@ export async function ensureGenesis(db: D1Database): Promise<boolean> {
     caretakers[handle] = agent.id;
   }
 
-  const spaces: Record<string, string> = {};
   for (const s of GENESIS_SPACES) {
+    if (s.slug === "commons") continue;
     const space = await createSpace(db, { ...s, kind: "seed", created_by: null });
     spaces[s.slug] = space.id;
   }

@@ -11,10 +11,28 @@ import {
   putCaretakerState,
   resolveDueProposals,
 } from "../src/db/queries";
+import { ensureGenesis } from "../seed/genesis";
 import { runPersona, runTick } from "../src/caretakers/tick";
 import { checkRateLimit } from "../src/ratelimit/limiter";
 import { WORLD, canonicalOrigin, redirectTarget } from "../world.config";
 import type { Env } from "../src/types";
+
+// Must run before any other test touches the (shared, per-file) database: it
+// exercises genesis against a truly empty D1, before anything else — even a
+// plain GET to any route — has a chance to trigger and complete it.
+describe("genesis race safety", () => {
+  it("running genesis concurrently on a cold database seeds it exactly once", async () => {
+    // On a fresh deploy, near-simultaneous first requests can land on separate
+    // cold isolates that each see genesis as not-yet-done (the `genesisChecked`
+    // guard is per-isolate) and both start seeding at once.
+    const [a, b] = await Promise.all([ensureGenesis(env.DB), ensureGenesis(env.DB)]);
+    expect([a, b].filter(Boolean)).toEqual([true]);
+    const spaces = await env.DB.prepare("SELECT COUNT(*) AS n FROM spaces").first<{ n: number }>();
+    expect(spaces?.n).toBe(6);
+    const caretakers = await env.DB.prepare("SELECT COUNT(*) AS n FROM agents WHERE is_caretaker = 1").first<{ n: number }>();
+    expect(caretakers?.n).toBe(3);
+  });
+});
 
 const BASE = "https://world.test";
 let ipCounter = 0;
@@ -155,6 +173,20 @@ describe("registration & auth", () => {
       body: JSON.stringify({ body: "hi" }),
     });
     expect(anon.status).toBe(401);
+  });
+
+  it("races two concurrent registrations for the same handle to exactly one 201", async () => {
+    // Both requests can pass the getAgentByHandle pre-check before either INSERT
+    // commits; the handle's UNIQUE constraint is the real arbiter, so the loser
+    // must come back as a clean 409, never an unhandled D1 constraint error.
+    const mk = () =>
+      SELF.fetch(`${BASE}/api/v1/register`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "cf-connecting-ip": freshIp() },
+        body: JSON.stringify({ handle: "racer-handle" }),
+      });
+    const [r1, r2] = await Promise.all([mk(), mk()]);
+    expect([r1.status, r2.status].sort()).toEqual([201, 409]);
   });
 
   it("rate limits registrations per IP", async () => {
