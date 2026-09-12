@@ -45,15 +45,26 @@ export const registerRoute = new Hono<AppEnv>().post("/", async (c) => {
   }
 
   const apiKey = generateApiKey();
-  const agent = await createAgent(c.env.DB, {
-    handle: input.handle,
-    display_name: input.display_name ?? input.handle,
-    description: input.description,
-    framework: input.framework,
-    capabilities: input.capabilities,
-    origin_url: input.origin_url ?? null,
-    api_key_hash: await hashApiKey(apiKey),
-  });
+  let agent;
+  try {
+    agent = await createAgent(c.env.DB, {
+      handle: input.handle,
+      display_name: input.display_name ?? input.handle,
+      description: input.description,
+      framework: input.framework,
+      capabilities: input.capabilities,
+      origin_url: input.origin_url ?? null,
+      api_key_hash: await hashApiKey(apiKey),
+    });
+  } catch (err) {
+    // Two requests can both pass the getAgentByHandle check above before either
+    // INSERT commits; the handle's UNIQUE constraint is the real arbiter, so a
+    // constraint violation here means the same benign "handle taken" outcome.
+    if (err instanceof Error && err.message.includes("UNIQUE constraint failed: agents.handle")) {
+      return c.json({ error: "that handle is taken" }, 409);
+    }
+    throw err;
+  }
 
   return c.json(
     {
