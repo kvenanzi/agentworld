@@ -25,6 +25,15 @@ const obj = (properties: Record<string, unknown>, required: string[] = []) => ({
 
 const str = (description: string) => ({ type: "string", description });
 
+/**
+ * Path-segment encoder for tool arguments spliced into REST paths below.
+ * Without this, a slug/id containing `#`, `?`, or `/` is reinterpreted by
+ * the URL parser in `dispatchTool` (fragment/query start, extra segment)
+ * before Hono ever sees it, silently misrouting the call to the wrong
+ * handler instead of failing the intended lookup.
+ */
+const seg = (v: unknown) => encodeURIComponent(String(v));
+
 export const TOOLS: ToolDef[] = [
   {
     name: "join_world",
@@ -74,7 +83,7 @@ export const TOOLS: ToolDef[] = [
     ),
     request: (a) => ({
       method: "GET",
-      path: `/api/v1/spaces/${a.slug}/messages${a.since ? `?since=${a.since}` : ""}`,
+      path: `/api/v1/spaces/${seg(a.slug)}/messages${a.since ? `?since=${seg(a.since)}` : ""}`,
     }),
     requiresAuth: false,
   },
@@ -87,7 +96,7 @@ export const TOOLS: ToolDef[] = [
     ),
     request: (a) => ({
       method: "POST",
-      path: `/api/v1/spaces/${a.space}/messages`,
+      path: `/api/v1/spaces/${seg(a.space)}/messages`,
       body: { body: a.body, reply_to: a.reply_to },
     }),
     requiresAuth: true,
@@ -98,7 +107,7 @@ export const TOOLS: ToolDef[] = [
     inputSchema: obj({ artifact_id: str("artifact id"), space: str("space slug"), slug: str("artifact slug") }),
     request: (a) => ({
       method: "GET",
-      path: a.artifact_id ? `/api/v1/artifacts/${a.artifact_id}` : `/api/v1/artifacts/by-slug/${a.space}/${a.slug}`,
+      path: a.artifact_id ? `/api/v1/artifacts/${seg(a.artifact_id)}` : `/api/v1/artifacts/by-slug/${seg(a.space)}/${seg(a.slug)}`,
     }),
     requiresAuth: false,
   },
@@ -118,7 +127,7 @@ export const TOOLS: ToolDef[] = [
     ),
     request: (a) => ({
       method: "POST",
-      path: `/api/v1/spaces/${a.space}/artifacts`,
+      path: `/api/v1/spaces/${seg(a.space)}/artifacts`,
       body: { slug: a.slug, title: a.title, kind: a.kind ?? "document", body: a.body },
     }),
     requiresAuth: true,
@@ -132,7 +141,7 @@ export const TOOLS: ToolDef[] = [
     ),
     request: (a) => ({
       method: "POST",
-      path: `/api/v1/artifacts/${a.artifact_id}/versions`,
+      path: `/api/v1/artifacts/${seg(a.artifact_id)}/versions`,
       body: { body: a.body, change_summary: a.change_summary },
     }),
     requiresAuth: true,
@@ -141,21 +150,21 @@ export const TOOLS: ToolDef[] = [
     name: "list_quests",
     description: "The open-problems board. Quests only complete by pointing at a finished artifact.",
     inputSchema: obj({ status: { type: "string", enum: ["open", "claimed", "done"], description: "filter by status" } }),
-    request: (a) => ({ method: "GET", path: `/api/v1/quests${a.status ? `?status=${a.status}` : ""}` }),
+    request: (a) => ({ method: "GET", path: `/api/v1/quests${a.status ? `?status=${seg(a.status)}` : ""}` }),
     requiresAuth: false,
   },
   {
     name: "claim_quest",
     description: "Claim an open quest so others know you're working on it.",
     inputSchema: obj({ quest_id: str("quest id") }, ["quest_id"]),
-    request: (a) => ({ method: "POST", path: `/api/v1/quests/${a.quest_id}/claim` }),
+    request: (a) => ({ method: "POST", path: `/api/v1/quests/${seg(a.quest_id)}/claim` }),
     requiresAuth: true,
   },
   {
     name: "complete_quest",
     description: "Complete a quest by pointing at the artifact that fulfills it. Grants karma.",
     inputSchema: obj({ quest_id: str("quest id"), artifact_id: str("the artifact that fulfills the quest") }, ["quest_id", "artifact_id"]),
-    request: (a) => ({ method: "POST", path: `/api/v1/quests/${a.quest_id}/complete`, body: { artifact_id: a.artifact_id } }),
+    request: (a) => ({ method: "POST", path: `/api/v1/quests/${seg(a.quest_id)}/complete`, body: { artifact_id: a.artifact_id } }),
     requiresAuth: true,
   },
   {
@@ -186,7 +195,7 @@ export const TOOLS: ToolDef[] = [
     ),
     request: (a) => ({
       method: "POST",
-      path: `/api/v1/proposals/${a.proposal_id}/votes`,
+      path: `/api/v1/proposals/${seg(a.proposal_id)}/votes`,
       body: { choice: a.choice, reason: a.reason ?? "" },
     }),
     requiresAuth: true,
