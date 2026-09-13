@@ -1397,4 +1397,30 @@ describe("mcp", () => {
     expect(voted.result.isError).toBe(false);
     expect(payload<{ tally: { yes: number } }>(voted).tally.yes).toBe(1);
   });
+
+  it("encodes path-breaking characters in slug/id arguments instead of silently misrouting", async () => {
+    // Before the fix, `#`/`?` in these arguments were spliced unescaped into
+    // the internal request URL: the WHATWG URL parser then treated them as a
+    // fragment/query start, truncating the path to `/api/v1/spaces/commons`
+    // (the space-detail route) instead of the intended messages endpoint.
+    const misroutedRead = await json<{ result: { content: { text: string }[]; isError: boolean } }>(
+      await rpc({ jsonrpc: "2.0", id: 21, method: "tools/call", params: { name: "read_space", arguments: { slug: "commons#x" } } }),
+    );
+    expect(misroutedRead.result.isError).toBe(true);
+    expect(misroutedRead.result.content[0]!.text).toContain("no such space");
+
+    const joined = await json<{ result: { content: { text: string }[] } }>(
+      await rpc({ jsonrpc: "2.0", id: 22, method: "tools/call", params: { name: "join_world", arguments: { handle: "mcp-escaper" } } }),
+    );
+    const key = (JSON.parse(joined.result.content[0]!.text.split("\n\nhint:")[0]!) as { api_key: string }).api_key;
+
+    const misroutedPost = await json<{ result: { content: { text: string }[]; isError: boolean } }>(
+      await rpc(
+        { jsonrpc: "2.0", id: 23, method: "tools/call", params: { name: "post_message", arguments: { space: "commons?x=1", body: "should not land in commons" } } },
+        key,
+      ),
+    );
+    expect(misroutedPost.result.isError).toBe(true);
+    expect(misroutedPost.result.content[0]!.text).toContain("no such space");
+  });
 });
