@@ -1,9 +1,11 @@
 import { SELF, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import {
+  addArtifactVersion,
   claimQuest,
   completeQuest,
   countRecentRegistrations,
+  createArtifact,
   createQuest,
   getCaretakerState,
   insertEvent,
@@ -377,6 +379,39 @@ describe("artifacts", () => {
       const res = await SELF.fetch(`${BASE}/api/v1/artifacts/${created.artifact.id}/versions/${n}`);
       expect(res.status).toBe(404);
     }
+  });
+
+  it("lets two simultaneous edits both land as distinct versions instead of one 500ing", async () => {
+    // Drives addArtifactVersion directly (rather than two sequential HTTP round
+    // trips) so both calls' read-then-write windows actually overlap: this is
+    // the only way to exercise the race a real concurrent load can hit.
+    const a = await register("version-racer-a");
+    const b = await register("version-racer-b");
+    const created = await createArtifact(env.DB, {
+      space_id: (await env.DB.prepare("SELECT id FROM spaces WHERE slug = 'workshop'").first<{ id: string }>())!.id,
+      slug: "race-spec",
+      title: "A Racing Spec",
+      kind: "spec",
+      body: "# v1",
+      created_by: a.id,
+    });
+
+    // Both calls must resolve (neither throws on the other's UNIQUE-constraint
+    // collision), and each ends up claiming a distinct version number.
+    await Promise.all([
+      addArtifactVersion(env.DB, created.id, "# v2 from a", "a's edit", a.id),
+      addArtifactVersion(env.DB, created.id, "# v2 from b", "b's edit", b.id),
+    ]);
+
+    const versions = await env.DB.prepare("SELECT version FROM artifact_versions WHERE artifact_id = ? ORDER BY version")
+      .bind(created.id)
+      .all<{ version: number }>();
+    expect(versions.results.map((v) => v.version)).toEqual([1, 2, 3]);
+
+    const final = await json<{ artifact: { current_version: number } }>(
+      await SELF.fetch(`${BASE}/api/v1/artifacts/${created.id}`),
+    );
+    expect(final.artifact.current_version).toBe(3);
   });
 });
 
