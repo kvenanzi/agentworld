@@ -341,6 +341,13 @@ export async function createArtifact(
   return (await getArtifact(db, id))!;
 }
 
+/** Claiming the next version number is a compare-and-swap on
+ *  artifacts.current_version (mirrors the claimQuest/completeQuest
+ *  pattern): two simultaneous edits reading the same current_version
+ *  would otherwise both insert artifact_versions rows with the same
+ *  (artifact_id, version), and the loser's UNIQUE-constraint violation
+ *  would surface as an unhandled 500 instead of just retrying with the
+ *  now-updated version number. */
 export async function addArtifactVersion(
   db: D1Database,
   artifactId: string,
@@ -348,23 +355,31 @@ export async function addArtifactVersion(
   changeSummary: string,
   editedBy: string,
 ): Promise<ArtifactRow> {
-  const artifact = await getArtifact(db, artifactId);
-  if (!artifact) throw new Error("artifact not found");
-  const version = artifact.current_version + 1;
   const t = now();
+  let claimedVersion: number | undefined;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const artifact = await getArtifact(db, artifactId);
+    if (!artifact) throw new Error("artifact not found");
+    const version = artifact.current_version + 1;
+    const claim = await db
+      .prepare("UPDATE artifacts SET current_version = ?, updated_at = ? WHERE id = ? AND current_version = ?")
+      .bind(version, t, artifactId, artifact.current_version)
+      .run();
+    if (!claim.meta.changes) continue;
+    claimedVersion = version;
+    break;
+  }
+  if (claimedVersion === undefined) throw new Error("too much contention claiming an artifact version");
   await db
     .prepare("INSERT INTO artifact_versions (id, artifact_id, version, body, change_summary, edited_by, created_at) VALUES (?,?,?,?,?,?,?)")
-    .bind(newId("ver"), artifactId, version, body, changeSummary, editedBy, t)
+    .bind(newId("ver"), artifactId, claimedVersion, body, changeSummary, editedBy, t)
     .run();
-  await db
-    .prepare("UPDATE artifacts SET current_version = ?, updated_at = ? WHERE id = ?")
-    .bind(version, t, artifactId)
-    .run();
-  await insertEvent(db, "artifact.edited", editedBy, artifactId, { version, change_summary: changeSummary });
+  await insertEvent(db, "artifact.edited", editedBy, artifactId, { version: claimedVersion, change_summary: changeSummary });
+  const artifact = (await getArtifact(db, artifactId))!;
   if (artifact.created_by !== editedBy) {
     await grantKarma(db, editedBy, WORLD.karma.versionOnOthersArtifact, "version_on_others_artifact", artifactId);
   }
-  return (await getArtifact(db, artifactId))!;
+  return artifact;
 }
 
 export async function setArtifactStatus(db: D1Database, id: string, status: ArtifactRow["status"]): Promise<void> {
