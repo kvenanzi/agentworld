@@ -1458,4 +1458,69 @@ describe("mcp", () => {
     expect(misroutedPost.result.isError).toBe(true);
     expect(misroutedPost.result.content[0]!.text).toContain("no such space");
   });
+
+  it("handles JSON-RPC protocol edges: bad input, unknown methods, batches, and resources/list", async () => {
+    const unknownTool = await json<{ error: { code: number } }>(
+      await rpc({ jsonrpc: "2.0", id: 24, method: "tools/call", params: { name: "no_such_tool", arguments: {} } }),
+    );
+    expect(unknownTool.error.code).toBe(-32602);
+
+    const unsupportedVersion = await json<{ result: { protocolVersion: string } }>(
+      await rpc({ jsonrpc: "2.0", id: 25, method: "initialize", params: { protocolVersion: "1999-01-01" } }),
+    );
+    expect(unsupportedVersion.result.protocolVersion).toBe("2025-06-18");
+
+    const omittedVersion = await json<{ result: { protocolVersion: string } }>(
+      await rpc({ jsonrpc: "2.0", id: 26, method: "initialize", params: {} }),
+    );
+    expect(omittedVersion.result.protocolVersion).toBe("2025-06-18");
+
+    const unknownMethod = await json<{ error: { code: number; message: string } }>(
+      await rpc({ jsonrpc: "2.0", id: 27, method: "no/such/method" }),
+    );
+    expect(unknownMethod.error.code).toBe(-32601);
+
+    const unknownMethodNotification = await rpc({ jsonrpc: "2.0", method: "no/such/method" });
+    expect(unknownMethodNotification.status).toBe(202);
+
+    const malformed = await SELF.fetch(`${BASE}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-connecting-ip": freshIp() },
+      body: "{not json",
+    });
+    expect(malformed.status).toBe(400);
+    expect((await json<{ error: { code: number } }>(malformed)).error.code).toBe(-32700);
+
+    const invalidRequest = await json<{ error: { code: number } }>(await rpc({ id: 28, method: "ping" }));
+    expect(invalidRequest.error.code).toBe(-32600);
+
+    const missingMethod = await json<{ error: { code: number } }>(await rpc({ jsonrpc: "2.0", id: 29 }));
+    expect(missingMethod.error.code).toBe(-32600);
+
+    const batch = (await json(
+      await rpc([
+        { jsonrpc: "2.0", id: 30, method: "ping" },
+        { jsonrpc: "2.0", id: 31, method: "tools/list" },
+      ]),
+    )) as { id: number; result: unknown }[];
+    expect(Array.isArray(batch)).toBe(true);
+    expect(batch.map((r) => r.id)).toEqual([30, 31]);
+
+    const emptyBatch = await rpc([]);
+    expect(emptyBatch.status).toBe(202);
+
+    const resourcesList = await json<{ result: { resources: { uri: string }[] } }>(
+      await rpc({ jsonrpc: "2.0", id: 32, method: "resources/list" }),
+    );
+    expect(resourcesList.result.resources.some((r) => r.uri === "terrarium://constitution")).toBe(true);
+
+    const unknownResource = await json<{ error: { code: number } }>(
+      await rpc({ jsonrpc: "2.0", id: 33, method: "resources/read", params: { uri: "terrarium://no-such-resource" } }),
+    );
+    expect(unknownResource.error.code).toBe(-32602);
+
+    const getMcp = await SELF.fetch(`${BASE}/mcp`, { headers: { "cf-connecting-ip": freshIp() } });
+    expect(getMcp.status).toBe(405);
+    expect((await json<{ error: string }>(getMcp)).error).toContain("stateless");
+  });
 });
