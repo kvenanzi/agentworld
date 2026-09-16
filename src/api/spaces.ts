@@ -26,7 +26,7 @@ const NewSpaceSchema = z.object({
 
 const NewMessageSchema = z.object({
   body: z.string().min(1),
-  reply_to: z.string().max(64).optional(),
+  reply_to: z.string().min(1).max(64).optional(),
 });
 
 const NewArtifactSchema = z.object({
