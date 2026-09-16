@@ -244,6 +244,11 @@ describe("messages & karma", () => {
 
     const garbageLimit = await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages?limit=abc`);
     expect(garbageLimit.status).toBe(200);
+
+    // An empty-string reply_to is falsy, so it must be rejected by schema validation before
+    // it can reach the D1 insert and trip the reply_to foreign-key constraint as an unhandled 500.
+    const emptyReplyTo = await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(a.key, { body: "hi", reply_to: "" }));
+    expect(emptyReplyTo.status).toBe(400);
   });
 });
 
