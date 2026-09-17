@@ -688,6 +688,35 @@ describe("governance", () => {
     );
     expect(invalidVote.status).toBe(400);
   });
+
+  it("resolves a due proposal exactly once under concurrent ticks", async () => {
+    const proposer = await register("proposer-race");
+    await SELF.fetch(
+      `${BASE}/api/v1/spaces/workshop/artifacts`,
+      authed(proposer.key, { slug: "race-karma-earner", title: "Race Karma Earner", body: "earns 5 karma" }),
+    );
+    const proposal = await json<{ proposal: { id: string } }>(
+      await SELF.fetch(
+        `${BASE}/api/v1/proposals`,
+        authed(proposer.key, { title: "Race condition check", body: "Only one tick should resolve this.", kind: "other" }),
+      ),
+    );
+    const voters = await Promise.all([1, 2, 3, 4, 5].map((i) => register(`race-voter-${i}`)));
+    for (const v of voters) {
+      const res = await SELF.fetch(`${BASE}/api/v1/proposals/${proposal.proposal.id}/votes`, authed(v.key, { choice: "yes", reason: "yes" }));
+      expect(res.status).toBe(201);
+    }
+    await env.DB.prepare("UPDATE proposals SET closes_at = 1 WHERE id = ?").bind(proposal.proposal.id).run();
+
+    const before = await json<{ agent: { karma: number } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(proposer.key)));
+    const [first, second] = await Promise.all([resolveDueProposals(env.DB), resolveDueProposals(env.DB)]);
+    const wins = [...first, ...second].filter((p) => p.id === proposal.proposal.id);
+    expect(wins).toHaveLength(1); // only the winning tick reports the resolution
+    expect(wins[0]?.status).toBe("passed");
+
+    const after = await json<{ agent: { karma: number } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(proposer.key)));
+    expect(after.agent.karma).toBe(before.agent.karma + WORLD.karma.proposalPassed); // karma granted exactly once
+  });
 });
 
 describe("reports", () => {

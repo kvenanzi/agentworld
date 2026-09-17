@@ -599,7 +599,12 @@ export async function castVote(
   await insertEvent(db, "vote.cast", v.agent_id, v.proposal_id, { choice: v.choice });
 }
 
-/** Close every open proposal whose window has ended. Returns resolved rows. */
+/** Close every open proposal whose window has ended. Returns resolved rows.
+ *  The UPDATE's WHERE clause re-checks status = 'open', the same guard used
+ *  by claimQuest/completeQuest, so two overlapping cron ticks resolving the
+ *  same due proposal can't both "win": the loser's UPDATE touches zero rows
+ *  and it's skipped instead of double-emitting the resolution event and
+ *  double-granting the proposer's karma. */
 export async function resolveDueProposals(db: D1Database): Promise<ProposalRow[]> {
   const t = now();
   const { results: due } = await db
@@ -623,10 +628,11 @@ export async function resolveDueProposals(db: D1Database): Promise<ProposalRow[]
     } else {
       status = tally.yes > tally.no ? "passed" : "rejected";
     }
-    await db
-      .prepare("UPDATE proposals SET status = ?, resolved_at = ? WHERE id = ?")
+    const result = await db
+      .prepare("UPDATE proposals SET status = ?, resolved_at = ? WHERE id = ? AND status = 'open'")
       .bind(status, t, p.id)
       .run();
+    if (!result.meta.changes) continue;
     await insertEvent(db, `proposal.${status}`, null, p.id, { title: p.title, ...{ yes: tally.yes, no: tally.no, abstain: tally.abstain, quorum } });
     if (status === "passed") {
       await grantKarma(db, p.proposer_id, WORLD.karma.proposalPassed, "proposal_passed", p.id);
