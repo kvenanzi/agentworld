@@ -74,6 +74,14 @@ describe("parseActions", () => {
     expect(parseActions(raw, 3)).toEqual([]);
   });
 
+  it("rejects an empty-string reply_to on post_message instead of letting it through as falsy-but-present", () => {
+    // Mirrors the citizen-facing POST /messages schema: an empty string is truthy in JSON
+    // but falsy in JS, so a loose schema would let it skip parent-message validation and
+    // reach the D1 insert, where the reply_to foreign key rejects it.
+    const raw = JSON.stringify([{ type: "post_message", space: "commons", body: "hi", reply_to: "" }]);
+    expect(parseActions(raw, 3)).toEqual([]);
+  });
+
   it("uses the outermost brackets, tolerating a stray ']' inside a string body", () => {
     const raw = JSON.stringify([{ type: "note", text: "see footnote [1]" }]);
     expect(parseActions(raw, 3)).toEqual([{ type: "note", text: "see footnote [1]" }]);
