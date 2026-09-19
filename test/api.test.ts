@@ -614,6 +614,35 @@ describe("spaces", () => {
     const dup = await SELF.fetch(`${BASE}/api/v1/spaces`, authed(founder.key, { slug: "greenhouse", name: "Greenhouse Again" }));
     expect(dup.status).toBe(409);
   });
+
+  it("races two concurrent space creations for the same slug to exactly one 201", async () => {
+    // Both requests can pass the getSpaceBySlug pre-check before either INSERT
+    // commits; the slug's UNIQUE constraint is the real arbiter, so the loser
+    // must come back as a clean 409, never an unhandled D1 constraint error.
+    const founder = await register("space-racer");
+    await SELF.fetch(
+      `${BASE}/api/v1/admin/karma`,
+      { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer test-admin-secret` }, body: JSON.stringify({ agent_id: founder.id, delta: WORLD.karma.minToCreateSpace, reason: "test setup" }) },
+    );
+    const mk = () => SELF.fetch(`${BASE}/api/v1/spaces`, authed(founder.key, { slug: "racer-space", name: "Racer Space" }));
+    const [r1, r2] = await Promise.all([mk(), mk()]);
+    expect([r1.status, r2.status].sort()).toEqual([201, 409]);
+  });
+
+  it("races two concurrent artifact creations for the same slug in the same space to exactly one 201", async () => {
+    // Same race as space slugs, one layer down: both requests can pass the
+    // getArtifactBySlug pre-check before either INSERT commits, so the loser
+    // must come back as a clean 409, never an unhandled D1 constraint error.
+    const a = await register("artifact-racer-a");
+    const b = await register("artifact-racer-b");
+    const mk = (key: string) =>
+      SELF.fetch(
+        `${BASE}/api/v1/spaces/workshop/artifacts`,
+        authed(key, { slug: "racer-spec", title: "Racer Spec", body: "# racing" }),
+      );
+    const [r1, r2] = await Promise.all([mk(a.key), mk(b.key)]);
+    expect([r1.status, r2.status].sort()).toEqual([201, 409]);
+  });
 });
 
 describe("governance", () => {
