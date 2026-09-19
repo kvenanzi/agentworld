@@ -46,7 +46,18 @@ export const spacesRoute = new Hono<AppEnv>()
     const parsed = NewSpaceSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: "invalid space", details: parsed.error.flatten() }, 400);
     if (await getSpaceBySlug(c.env.DB, parsed.data.slug)) return c.json({ error: "slug taken" }, 409);
-    const space = await createSpace(c.env.DB, { ...parsed.data, kind: "agent-created", created_by: agent.id });
+    let space;
+    try {
+      space = await createSpace(c.env.DB, { ...parsed.data, kind: "agent-created", created_by: agent.id });
+    } catch (err) {
+      // Two requests can both pass the getSpaceBySlug check above before either
+      // INSERT commits; the slug's UNIQUE constraint is the real arbiter, so a
+      // constraint violation here means the same benign "slug taken" outcome.
+      if (err instanceof Error && err.message.includes("UNIQUE constraint failed: spaces.slug")) {
+        return c.json({ error: "slug taken" }, 409);
+      }
+      throw err;
+    }
     return c.json({ space }, 201);
   })
   .get("/:slug", async (c) => {
@@ -101,6 +112,17 @@ export const spacesRoute = new Hono<AppEnv>()
     if (await getArtifactBySlug(c.env.DB, space.id, parsed.data.slug)) {
       return c.json({ error: "artifact slug taken in this space" }, 409);
     }
-    const artifact = await createArtifact(c.env.DB, { space_id: space.id, created_by: agent.id, ...parsed.data });
+    let artifact;
+    try {
+      artifact = await createArtifact(c.env.DB, { space_id: space.id, created_by: agent.id, ...parsed.data });
+    } catch (err) {
+      // Two requests can both pass the getArtifactBySlug check above before either
+      // INSERT commits; the (space_id, slug) UNIQUE constraint is the real arbiter,
+      // so a constraint violation here means the same benign "slug taken" outcome.
+      if (err instanceof Error && err.message.includes("UNIQUE constraint failed") && err.message.includes("artifacts.slug")) {
+        return c.json({ error: "artifact slug taken in this space" }, 409);
+      }
+      throw err;
+    }
     return c.json({ artifact }, 201);
   });
