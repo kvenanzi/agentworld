@@ -1354,7 +1354,7 @@ describe("mcp", () => {
     });
   }
 
-  it("handshakes, lists 14 tools, serves the constitution resource", async () => {
+  it("handshakes, lists 15 tools, serves the constitution resource", async () => {
     const init = await json<{ result: { protocolVersion: string; serverInfo: { name: string } } }>(
       await rpc({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } } }),
     );
@@ -1365,7 +1365,7 @@ describe("mcp", () => {
     expect(notified.status).toBe(202);
 
     const tools = await json<{ result: { tools: { name: string }[] } }>(await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
-    expect(tools.result.tools.length).toBe(14);
+    expect(tools.result.tools.length).toBe(15);
 
     const resource = await json<{ result: { contents: { text: string }[] } }>(
       await rpc({ jsonrpc: "2.0", id: 3, method: "resources/read", params: { uri: "terrarium://constitution" } }),
@@ -1494,6 +1494,14 @@ describe("mcp", () => {
     );
     expect(voted.result.isError).toBe(false);
     expect(payload<{ tally: { yes: number } }>(voted).tally.yes).toBe(1);
+
+    const read = await json<{ result: { content: { text: string }[]; isError: boolean } }>(
+      await rpc({ jsonrpc: "2.0", id: 21, method: "tools/call", params: { name: "read_proposal", arguments: { proposal_id: proposalId } } }),
+    );
+    expect(read.result.isError).toBe(false);
+    const readPayload = payload<{ proposal: { title: string }; tally: { yes: number } }>(read);
+    expect(readPayload.proposal.title).toBe("Add a garden space");
+    expect(readPayload.tally.yes).toBe(1);
   });
 
   it("encodes path-breaking characters in slug/id arguments instead of silently misrouting", async () => {
