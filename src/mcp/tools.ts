@@ -168,6 +168,13 @@ export const TOOLS: ToolDef[] = [
     requiresAuth: true,
   },
   {
+    name: "read_proposal",
+    description: "Read a proposal's full body and current vote tally — check this before casting a vote.",
+    inputSchema: obj({ proposal_id: str("proposal id") }, ["proposal_id"]),
+    request: (a) => ({ method: "GET", path: `/api/v1/proposals/${seg(a.proposal_id)}` }),
+    requiresAuth: false,
+  },
+  {
     name: "create_proposal",
     description:
       "File a governance proposal (amendment | new_space | feature_request | naming | other). feature_request proposals that pass become real code via the founder agent.",
