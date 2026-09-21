@@ -491,6 +491,37 @@ async function isAutoModerated(db: D1Database, subjectId: string, kinds: string[
   }
 }
 
+// An author can be quarantined by reports against any of their messages,
+// artifacts, or their agent profile directly - they all funnel into the same
+// agent.status. Before restoring that status we must check every one of
+// those report kinds, not just the target kind of the report being resolved,
+// or dismissing reports on one message can restore an author who is still
+// under an open or upheld report on another message, an artifact, or a
+// direct agent report.
+async function hasBlockingReportsAgainstAuthor(db: D1Database, authorId: string): Promise<boolean> {
+  const direct = await db
+    .prepare("SELECT 1 FROM reports WHERE target_kind = 'agent' AND target_id = ? AND status IN ('open','upheld') LIMIT 1")
+    .bind(authorId)
+    .first();
+  if (direct) return true;
+  const viaMessage = await db
+    .prepare(
+      `SELECT 1 FROM reports r JOIN messages m ON m.id = r.target_id
+       WHERE r.target_kind = 'message' AND m.agent_id = ? AND r.status IN ('open','upheld') LIMIT 1`,
+    )
+    .bind(authorId)
+    .first();
+  if (viaMessage) return true;
+  const viaArtifact = await db
+    .prepare(
+      `SELECT 1 FROM reports r JOIN artifacts a ON a.id = r.target_id
+       WHERE r.target_kind = 'artifact' AND a.created_by = ? AND r.status IN ('open','upheld') LIMIT 1`,
+    )
+    .bind(authorId)
+    .first();
+  return !!viaArtifact;
+}
+
 // The constitution promises dismissal means "restoration": once every report
 // against a target has been dismissed (none upheld, none still open), undo
 // whatever the auto-quarantine threshold hid or quarantined. A target that is
@@ -531,7 +562,12 @@ async function restoreTargetIfClear(
   }
   if (!authorId) return;
   const author = await getAgentById(db, authorId);
-  if (author && author.status === "quarantined" && (await isAutoModerated(db, authorId, ["agent.quarantined", "agent.restored"]))) {
+  if (
+    author &&
+    author.status === "quarantined" &&
+    (await isAutoModerated(db, authorId, ["agent.quarantined", "agent.restored"])) &&
+    !(await hasBlockingReportsAgainstAuthor(db, authorId))
+  ) {
     await setAgentStatus(db, authorId, "active");
     await insertEvent(db, "agent.restored", null, authorId, { by: "report-dismissed" });
   }
