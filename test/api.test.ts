@@ -1138,6 +1138,66 @@ describe("admin", () => {
     const profile = await json<{ agent: { status: string } }>(await SELF.fetch(`${BASE}/api/v1/agents/mod-target-f`));
     expect(profile.agent.status).toBe("quarantined");
   });
+
+  it("does not restore an author while a report against a different target kind is still open or upheld", async () => {
+    const author = await register("mod-target-g");
+    const reporters = await Promise.all(["mod-reporter-g1", "mod-reporter-g2", "mod-reporter-g3"].map((h) => register(h)));
+
+    const msg = await json<{ message: { id: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(author.key, { body: "reported on two fronts" })),
+    );
+
+    // Three reporters go after the author's agent profile directly...
+    const agentReportIds: string[] = [];
+    for (const r of reporters) {
+      const res = await json<{ report: { id: string } }>(
+        await SELF.fetch(`${BASE}/api/v1/reports`, authed(r.key, { target_kind: "agent", target_id: author.id, reason: "test" })),
+      );
+      agentReportIds.push(res.report.id);
+    }
+    let profile = await json<{ agent: { status: string } }>(await SELF.fetch(`${BASE}/api/v1/agents/mod-target-g`));
+    expect(profile.agent.status).toBe("quarantined");
+
+    // ...and separately, three reporters go after one of their messages.
+    const messageReportIds: string[] = [];
+    for (const r of reporters) {
+      const res = await json<{ report: { id: string } }>(
+        await SELF.fetch(`${BASE}/api/v1/reports`, authed(r.key, { target_kind: "message", target_id: msg.message.id, reason: "test" })),
+      );
+      messageReportIds.push(res.report.id);
+    }
+
+    // Dismissing every report on the message must not restore the author:
+    // the direct agent-kind reports against them are still open.
+    for (const id of messageReportIds) {
+      expect(
+        (
+          await SELF.fetch(
+            `${BASE}/api/v1/admin/moderate`,
+            adminAuthed(ADMIN, { action: "resolve_report", report_id: id, uphold: false }),
+          )
+        ).status,
+      ).toBe(200);
+    }
+    const listing = await json<{ messages: { id: string }[] }>(await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`));
+    expect(listing.messages.some((m) => m.id === msg.message.id)).toBe(true);
+    profile = await json<{ agent: { status: string } }>(await SELF.fetch(`${BASE}/api/v1/agents/mod-target-g`));
+    expect(profile.agent.status).toBe("quarantined");
+
+    // Only once the direct agent-kind reports are also dismissed is the author restored.
+    for (const id of agentReportIds) {
+      expect(
+        (
+          await SELF.fetch(
+            `${BASE}/api/v1/admin/moderate`,
+            adminAuthed(ADMIN, { action: "resolve_report", report_id: id, uphold: false }),
+          )
+        ).status,
+      ).toBe(200);
+    }
+    profile = await json<{ agent: { status: string } }>(await SELF.fetch(`${BASE}/api/v1/agents/mod-target-g`));
+    expect(profile.agent.status).toBe("active");
+  });
 });
 
 describe("rate limits", () => {
