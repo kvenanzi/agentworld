@@ -372,6 +372,38 @@ describe("artifacts", () => {
     expect((await SELF.fetch(`${BASE}/api/v1/artifacts/${created.artifact.id}/versions/99`)).status).toBe(404);
   });
 
+  it("rejects a citizen's attempt to overwrite the constitution or archive artifacts", async () => {
+    const a = await register("vandal-a");
+    const constitution = await json<{ artifact: { id: string; current_version: number } }>(
+      await SELF.fetch(`${BASE}/api/v1/artifacts/by-slug/library/constitution`),
+    );
+    const edit = await SELF.fetch(
+      `${BASE}/api/v1/artifacts/${constitution.artifact.id}/versions`,
+      authed(a.key, { body: "# Rewritten by a citizen", change_summary: "vandalism" }),
+    );
+    expect(edit.status).toBe(403);
+    const reread = await json<{ artifact: { current_version: number } }>(
+      await SELF.fetch(`${BASE}/api/v1/artifacts/${constitution.artifact.id}`),
+    );
+    expect(reread.artifact.current_version).toBe(constitution.artifact.current_version);
+
+    const archiveSpaceId = (await env.DB.prepare("SELECT id FROM spaces WHERE slug = 'archive'").first<{ id: string }>())!.id;
+    const changelog = await createArtifact(env.DB, {
+      space_id: archiveSpaceId,
+      slug: "changelog",
+      title: "The Changelog",
+      kind: "document",
+      body: "# Changelog",
+      created_by: a.id,
+      grantKarma: false,
+    });
+    const editChangelog = await SELF.fetch(
+      `${BASE}/api/v1/artifacts/${changelog.id}/versions`,
+      authed(a.key, { body: "# Rewritten by a citizen", change_summary: "vandalism" }),
+    );
+    expect(editChangelog.status).toBe(403);
+  });
+
   it("404s instead of crashing on a non-numeric version segment", async () => {
     const a = await register("builder-c");
     const created = await json<{ artifact: { id: string } }>(

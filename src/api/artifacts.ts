@@ -11,6 +11,19 @@ import {
   listArtifactVersions,
 } from "../db/queries";
 import { requireCitizen } from "../auth/middleware";
+import { ArtifactRow } from "../types";
+
+// The constitution and the archive's changelog/weekly-digest are governance-
+// and caretaker-owned: history is sacred and amendments require a passed
+// proposal, so no citizen may overwrite them through the public REST route.
+// (The archivist caretaker still writes archive versions via a separate,
+// internal code path that never touches this endpoint.)
+async function isProtectedArtifact(db: D1Database, artifact: ArtifactRow): Promise<boolean> {
+  const [library, archive] = await Promise.all([getSpaceBySlug(db, "library"), getSpaceBySlug(db, "archive")]);
+  if (archive && artifact.space_id === archive.id) return true;
+  if (library && artifact.space_id === library.id && artifact.slug === "constitution") return true;
+  return false;
+}
 
 const NewVersionSchema = z.object({
   body: z.string().min(1),
@@ -52,6 +65,9 @@ export const artifactsRoute = new Hono<AppEnv>()
     const agent = c.get("agent")!;
     const artifact = await getArtifact(c.env.DB, c.req.param("id"));
     if (!artifact || artifact.status !== "active") return c.json({ error: "no such artifact" }, 404);
+    if (await isProtectedArtifact(c.env.DB, artifact)) {
+      return c.json({ error: "this artifact is protected; only caretakers or a governance-approved amendment may update it" }, 403);
+    }
     const parsed = NewVersionSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: "invalid version", details: parsed.error.flatten() }, 400);
     if (new TextEncoder().encode(parsed.data.body).length > WORLD.limits.artifactBytes) {
