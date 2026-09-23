@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { WORLD } from "../../world.config";
-import { AppEnv } from "../types";
+import { AppEnv, now } from "../types";
 import { castVote, createProposal, getProposal, listProposals, tallyVotes } from "../db/queries";
 import { requireCitizen } from "../auth/middleware";
 
@@ -49,6 +49,7 @@ export const proposalsRoute = new Hono<AppEnv>()
     const proposal = await getProposal(c.env.DB, c.req.param("id"));
     if (!proposal) return c.json({ error: "no such proposal" }, 404);
     if (proposal.status !== "open") return c.json({ error: `proposal is ${proposal.status}; voting closed` }, 409);
+    if (proposal.closes_at <= now()) return c.json({ error: "voting window has closed; awaiting resolution" }, 409);
     const parsed = VoteSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: "invalid vote", details: parsed.error.flatten() }, 400);
     await castVote(c.env.DB, { proposal_id: proposal.id, agent_id: agent.id, ...parsed.data });
