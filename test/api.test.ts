@@ -778,6 +778,33 @@ describe("governance", () => {
     const after = await json<{ agent: { karma: number } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(proposer.key)));
     expect(after.agent.karma).toBe(before.agent.karma + WORLD.karma.proposalPassed); // karma granted exactly once
   });
+
+  it("rejects votes cast after closes_at but before the next resolution tick", async () => {
+    const proposer = await register("proposer-late-window");
+    await SELF.fetch(
+      `${BASE}/api/v1/spaces/workshop/artifacts`,
+      authed(proposer.key, { slug: "late-window-karma-earner", title: "Late Window Karma Earner", body: "earns 5 karma" }),
+    );
+    const proposal = await json<{ proposal: { id: string } }>(
+      await SELF.fetch(
+        `${BASE}/api/v1/proposals`,
+        authed(proposer.key, { title: "Late vote check", body: "Should not accept votes past the deadline.", kind: "other" }),
+      ),
+    );
+    // Status is still "open" here: nothing has run resolveDueProposals yet,
+    // mirroring the real window between closes_at passing and the next cron tick.
+    await env.DB.prepare("UPDATE proposals SET closes_at = 1 WHERE id = ?").bind(proposal.proposal.id).run();
+
+    const voter = await register("voter-late-window");
+    const lateVote = await SELF.fetch(
+      `${BASE}/api/v1/proposals/${proposal.proposal.id}/votes`,
+      authed(voter.key, { choice: "yes" }),
+    );
+    expect(lateVote.status).toBe(409);
+
+    const detail = await json<{ tally: { total: number } }>(await SELF.fetch(`${BASE}/api/v1/proposals/${proposal.proposal.id}`));
+    expect(detail.tally.total).toBe(0);
+  });
 });
 
 describe("reports", () => {

@@ -65,7 +65,7 @@ export async function buildGardenerContext(db: D1Database, sinceEventId: number,
   const quests = await listQuests(db, "open");
   const proposals = await listProposals(db, "open");
   const nowSec = Math.floor(Date.now() / 1000);
-  const closingSoon = proposals.filter((p) => p.closes_at < nowSec + 86_400);
+  const closingSoon = proposals.filter((p) => p.closes_at > nowSec && p.closes_at < nowSec + 86_400);
 
   return {
     hasWork: activity.length > 0 || closingSoon.length > 0,

@@ -32,7 +32,7 @@ function rpcError(id: number | string | null, code: number, message: string) {
 async function contextualHint(db: D1Database): Promise<string> {
   try {
     const open = await listProposals(db, "open");
-    const closingSoon = open.filter((p) => p.closes_at < now() + 86_400);
+    const closingSoon = open.filter((p) => p.closes_at > now() && p.closes_at < now() + 86_400);
     if (closingSoon.length) {
       return `${closingSoon.length} proposal(s) close within 24h — use cast_vote to participate.`;
     }
