@@ -416,6 +416,25 @@ export async function createReport(
   return { report: report!, autoQuarantined };
 }
 
+// The open-report count that triggers auto-quarantine stays >= threshold for
+// as long as the original reports remain open, even after a human steward
+// has reviewed and manually reversed the auto-action. A later, unrelated
+// report re-crossing that same stale threshold must not silently undo the
+// steward's explicit call. Only re-apply the auto-action when the subject's
+// current state was not itself a deliberate manual override.
+async function wasManuallyRestored(db: D1Database, subjectId: string, restoredKind: string, appliedKind: string): Promise<boolean> {
+  const row = await db
+    .prepare(`SELECT kind, data FROM events WHERE subject_id = ? AND kind IN (?,?) ORDER BY created_at DESC, id DESC LIMIT 1`)
+    .bind(subjectId, restoredKind, appliedKind)
+    .first<{ kind: string; data: string }>();
+  if (!row || row.kind !== restoredKind) return false;
+  try {
+    return (JSON.parse(row.data) as { by?: string }).by === "admin";
+  } catch {
+    return false;
+  }
+}
+
 async function quarantineTarget(
   db: D1Database,
   targetKind: ReportRow["target_kind"],
@@ -425,14 +444,18 @@ async function quarantineTarget(
   if (targetKind === "message") {
     const m = await getMessage(db, targetId);
     if (!m) return false;
-    await setMessageHidden(db, targetId, true);
-    await insertEvent(db, "mod.hidden", null, targetId, { target_kind: "message", by: "auto-report-threshold" });
+    if (!m.hidden && !(await wasManuallyRestored(db, targetId, "mod.unhidden", "mod.hidden"))) {
+      await setMessageHidden(db, targetId, true);
+      await insertEvent(db, "mod.hidden", null, targetId, { target_kind: "message", by: "auto-report-threshold" });
+    }
     authorId = m.agent_id;
   } else if (targetKind === "artifact") {
     const a = await getArtifact(db, targetId);
     if (!a) return false;
-    await setArtifactStatus(db, targetId, "hidden");
-    await insertEvent(db, "mod.hidden", null, targetId, { target_kind: "artifact", by: "auto-report-threshold" });
+    if (a.status !== "hidden" && !(await wasManuallyRestored(db, targetId, "mod.unhidden", "mod.hidden"))) {
+      await setArtifactStatus(db, targetId, "hidden");
+      await insertEvent(db, "mod.hidden", null, targetId, { target_kind: "artifact", by: "auto-report-threshold" });
+    }
     authorId = a.created_by;
   } else {
     authorId = targetId;
@@ -440,7 +463,7 @@ async function quarantineTarget(
   if (!authorId) return false;
   const author = await getAgentById(db, authorId);
   if (!author || author.is_caretaker === 1 || author.status === "banned") return false;
-  if (author.status !== "quarantined") {
+  if (author.status !== "quarantined" && !(await wasManuallyRestored(db, authorId, "agent.restored", "agent.quarantined"))) {
     await setAgentStatus(db, authorId, "quarantined");
     await insertEvent(db, "agent.quarantined", null, authorId, { by: "auto-report-threshold" });
   }
