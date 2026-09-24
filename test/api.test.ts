@@ -844,6 +844,87 @@ describe("moderation", () => {
     const messages = await json<{ messages: { id: string }[] }>(await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`));
     expect(messages.messages.some((m) => m.id === posted.message.id)).toBe(false);
   });
+
+  it("a report filed after a manual unhide does not re-trigger the auto-quarantine hide", async () => {
+    const spammer = await register("spammer-t");
+    const posted = await json<{ message: { id: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(spammer.key, { body: "send 1 BTC to bc1qscamscamscam now" })),
+    );
+    const reporters = await Promise.all([1, 2, 3].map((i) => register(`re-reporter-${i}`)));
+    for (const r of reporters) {
+      const res = await SELF.fetch(
+        `${BASE}/api/v1/reports`,
+        authed(r.key, { target_kind: "message", target_id: posted.message.id, reason: "solicitation" }),
+      );
+      expect(res.status).toBe(201);
+    }
+    const hidden = await json<{ messages: { id: string }[] }>(await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`));
+    expect(hidden.messages.some((m) => m.id === posted.message.id)).toBe(false);
+
+    // Human steward reviews and manually restores the message.
+    expect(
+      (
+        await SELF.fetch(`${BASE}/api/v1/admin/moderate`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: "Bearer test-admin-secret" },
+          body: JSON.stringify({ action: "unhide_message", message_id: posted.message.id }),
+        })
+      ).status,
+    ).toBe(200);
+    const afterUnhide = await json<{ messages: { id: string }[] }>(await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`));
+    expect(afterUnhide.messages.some((m) => m.id === posted.message.id)).toBe(true);
+
+    // A fourth, unrelated citizen files another report on the same still-open threshold.
+    const latecomer = await register("re-reporter-4");
+    const laterReport = await SELF.fetch(
+      `${BASE}/api/v1/reports`,
+      authed(latecomer.key, { target_kind: "message", target_id: posted.message.id, reason: "still solicitation" }),
+    );
+    expect(laterReport.status).toBe(201);
+
+    // The steward's manual restore must stick; a stale open-report count must not re-hide it.
+    const stillVisible = await json<{ messages: { id: string }[] }>(await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`));
+    expect(stillVisible.messages.some((m) => m.id === posted.message.id)).toBe(true);
+  });
+
+  it("a report filed after a manual agent restore does not re-trigger auto-quarantine", async () => {
+    const target = await register("agent-restore-target");
+    const reporters = await Promise.all([1, 2, 3].map((i) => register(`agent-reporter-${i}`)));
+    for (const r of reporters) {
+      const res = await SELF.fetch(
+        `${BASE}/api/v1/reports`,
+        authed(r.key, { target_kind: "agent", target_id: target.id, reason: "bad behavior" }),
+      );
+      expect(res.status).toBe(201);
+    }
+    let profile = await json<{ agent: { status: string } }>(await SELF.fetch(`${BASE}/api/v1/agents/agent-restore-target`));
+    expect(profile.agent.status).toBe("quarantined");
+
+    // Human steward reviews and manually restores the agent.
+    expect(
+      (
+        await SELF.fetch(`${BASE}/api/v1/admin/moderate`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: "Bearer test-admin-secret" },
+          body: JSON.stringify({ action: "restore", agent_id: target.id }),
+        })
+      ).status,
+    ).toBe(200);
+    profile = await json<{ agent: { status: string } }>(await SELF.fetch(`${BASE}/api/v1/agents/agent-restore-target`));
+    expect(profile.agent.status).toBe("active");
+
+    // A fourth, unrelated citizen files another report on the same still-open threshold.
+    const latecomer = await register("agent-reporter-4");
+    const laterReport = await SELF.fetch(
+      `${BASE}/api/v1/reports`,
+      authed(latecomer.key, { target_kind: "agent", target_id: target.id, reason: "still bad behavior" }),
+    );
+    expect(laterReport.status).toBe(201);
+
+    // The steward's manual restore must stick; a stale open-report count must not re-quarantine.
+    profile = await json<{ agent: { status: string } }>(await SELF.fetch(`${BASE}/api/v1/agents/agent-restore-target`));
+    expect(profile.agent.status).toBe("active");
+  });
 });
 
 describe("admin", () => {
