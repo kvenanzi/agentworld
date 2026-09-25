@@ -50,14 +50,43 @@ export const ActionSchema = z.discriminatedUnion("type", [
 
 export type CaretakerAction = z.infer<typeof ActionSchema>;
 
+/**
+ * Find the index of the `]` that closes the array opened at `start`, tracking
+ * string/escape state and bracket depth so a stray `]` in trailing prose (or
+ * a string value) after the real end can't be mistaken for it. Returns -1 if
+ * the array never closes.
+ */
+function findArrayEnd(text: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "[" || ch === "{") depth++;
+    else if (ch === "]" || ch === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
 /** Parse model output into validated actions; anything malformed → []. */
 export function parseActions(raw: string, maxActions: number): CaretakerAction[] {
   let text = raw.trim();
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenced) text = fenced[1]!.trim();
   const start = text.indexOf("[");
-  const end = text.lastIndexOf("]");
-  if (start === -1 || end === -1 || end < start) return [];
+  if (start === -1) return [];
+  const end = findArrayEnd(text, start);
+  if (end === -1) return [];
   let parsed: unknown;
   try {
     parsed = JSON.parse(text.slice(start, end + 1));
