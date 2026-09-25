@@ -86,4 +86,12 @@ describe("parseActions", () => {
     const raw = JSON.stringify([{ type: "note", text: "see footnote [1]" }]);
     expect(parseActions(raw, 3)).toEqual([{ type: "note", text: "see footnote [1]" }]);
   });
+
+  it("finds the array's true closing bracket even when trailing prose contains a ']'", () => {
+    // A naive `lastIndexOf("]")` would grab the bracket in "[2]" below, slice
+    // into the middle of the prose, and fail to parse — silently dropping
+    // otherwise-valid actions.
+    const raw = [JSON.stringify([{ type: "note", text: "ok" }]), "", "Let me know if that helps, see item [2] for context."].join("\n");
+    expect(parseActions(raw, 3)).toEqual([{ type: "note", text: "ok" }]);
+  });
 });
