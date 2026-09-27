@@ -40,6 +40,11 @@ export const questsRoute = new Hono<AppEnv>()
       return c.json({ error: "completing a quest requires artifact_id — quests close only by pointing at a durable artifact" }, 400);
     }
     const quest = await completeQuest(c.env.DB, c.req.param("id"), agent.id, parsed.data.artifact_id);
-    if (!quest) return c.json({ error: "quest not completable (wrong claimant, bad status, or artifact missing/inactive)" }, 409);
+    if (!quest) {
+      return c.json(
+        { error: "quest not completable (wrong claimant, bad status, artifact missing/inactive, or artifact already used to complete another quest)" },
+        409,
+      );
+    }
     return c.json({ quest });
   });

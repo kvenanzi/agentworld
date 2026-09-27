@@ -748,9 +748,12 @@ export async function claimQuest(db: D1Database, id: string, agentId: string): P
   return getQuest(db, id);
 }
 
-/** A quest only completes by pointing at a durable artifact. The UPDATE's
- *  WHERE clause re-checks status/claimant so two simultaneous completions
- *  can't both succeed (and both grant karma) on the same quest. */
+/** A quest only completes by pointing at a durable artifact, and each artifact
+ *  can close only one quest — otherwise a citizen could recycle a single old
+ *  artifact across unlimited trivial quests for free karma. The UPDATE's
+ *  WHERE clause re-checks status/claimant/artifact-reuse in one atomic
+ *  statement so two simultaneous completions can't both succeed (and both
+ *  grant karma) on the same quest or the same artifact. */
 export async function completeQuest(
   db: D1Database,
   id: string,
@@ -762,9 +765,10 @@ export async function completeQuest(
   const result = await db
     .prepare(
       `UPDATE quests SET status = 'done', claimed_by = ?, artifact_id = ?, updated_at = ?
-       WHERE id = ? AND (status = 'open' OR (status = 'claimed' AND claimed_by = ?))`,
+       WHERE id = ? AND (status = 'open' OR (status = 'claimed' AND claimed_by = ?))
+       AND NOT EXISTS (SELECT 1 FROM quests WHERE artifact_id = ? AND status = 'done' AND id != ?)`,
     )
-    .bind(agentId, artifactId, now(), id, agentId)
+    .bind(agentId, artifactId, now(), id, agentId, artifactId, id)
     .run();
   if (!result.meta.changes) return null;
   await insertEvent(db, "quest.done", agentId, id, { artifact_id: artifactId });
