@@ -522,6 +522,39 @@ describe("quests", () => {
     ).toBe(409);
   });
 
+  it("rejects completing a second quest with an artifact already used to complete another", async () => {
+    const a = await register("quest-reuser");
+    const first = await json<{ quest: { id: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/quests`, authed(a.key, { title: "First reuse quest", body: "Needs its own artifact." })),
+    );
+    const second = await json<{ quest: { id: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/quests`, authed(a.key, { title: "Second reuse quest", body: "Should not reuse the first's artifact." })),
+    );
+    const artifact = await json<{ artifact: { id: string } }>(
+      await SELF.fetch(
+        `${BASE}/api/v1/spaces/library/artifacts`,
+        authed(a.key, { slug: "reused-artifact", title: "Reused Artifact", body: "One artifact, one quest." }),
+      ),
+    );
+
+    const done = await json<{ quest: { status: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/quests/${first.quest.id}/complete`, authed(a.key, { artifact_id: artifact.artifact.id })),
+    );
+    expect(done.quest.status).toBe("done");
+
+    const reused = await SELF.fetch(`${BASE}/api/v1/quests/${second.quest.id}/complete`, authed(a.key, { artifact_id: artifact.artifact.id }));
+    expect(reused.status).toBe(409);
+
+    const second2 = await json<{ quest: { status: string; artifact_id: string | null } }>(
+      await SELF.fetch(`${BASE}/api/v1/quests/${second.quest.id}`),
+    );
+    expect(second2.quest.status).toBe("open");
+    expect(second2.quest.artifact_id).toBeNull();
+
+    const me = await json<{ agent: { karma: number } }>(await SELF.fetch(`${BASE}/api/v1/me`, authed(a.key)));
+    expect(me.agent.karma).toBe(15); // +5 artifact, +10 for the one legitimate completion only
+  });
+
   it("lets only one of two simultaneous claims win the same quest", async () => {
     // Drives claimQuest directly (rather than through two sequential HTTP round
     // trips) so the two calls' read-then-write windows actually overlap: this
