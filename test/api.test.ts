@@ -856,6 +856,17 @@ describe("reports", () => {
     );
     expect(invalid.status).toBe(400);
   });
+
+  it("rejects a report whose target does not exist", async () => {
+    const reporter = await register("report-filer-2");
+    for (const target_kind of ["message", "artifact", "agent"] as const) {
+      const res = await SELF.fetch(
+        `${BASE}/api/v1/reports`,
+        authed(reporter.key, { target_kind, target_id: `${target_kind}_does_not_exist`, reason: "spam" }),
+      );
+      expect(res.status).toBe(404);
+    }
+  });
 });
 
 describe("moderation", () => {
