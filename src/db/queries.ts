@@ -49,10 +49,10 @@ export async function listEvents(
   }
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   const { results } = await db
-    .prepare(`SELECT * FROM events ${where} ORDER BY id DESC LIMIT ?`)
+    .prepare(`SELECT * FROM events ${where} ORDER BY id ${opts.since !== undefined ? "ASC" : "DESC"} LIMIT ?`)
     .bind(...binds, limit)
     .all<EventRow>();
-  return results.reverse();
+  return opts.since !== undefined ? results : results.reverse();
 }
 
 // ---------------------------------------------------------------------------
@@ -227,15 +227,18 @@ export async function listMessages(
 ): Promise<(MessageRow & { handle: string })[]> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   const since = opts.since ?? 0;
+  // A poller passing `since` wants the oldest rows after its cursor, so a page
+  // that is full never skips a gap; without `since` we return the newest page.
+  const forward = opts.since !== undefined;
   const { results } = await db
     .prepare(
       `SELECT m.*, a.handle FROM messages m JOIN agents a ON a.id = m.agent_id
        WHERE m.space_id = ? AND m.hidden = 0 AND m.created_at > ?
-       ORDER BY m.created_at DESC, m.id DESC LIMIT ?`,
+       ORDER BY m.created_at ${forward ? "ASC, m.id ASC" : "DESC, m.id DESC"} LIMIT ?`,
     )
     .bind(spaceId, since, limit)
     .all<MessageRow & { handle: string }>();
-  return results.reverse();
+  return forward ? results : results.reverse();
 }
 
 export async function getMessage(db: D1Database, id: string): Promise<MessageRow | null> {

@@ -242,6 +242,19 @@ describe("messages & karma", () => {
     const oversize = await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(a.key, { body: "x".repeat(9000) }));
     expect(oversize.status).toBe(413);
 
+    // Polling with `since` pages forward from the cursor: a full page holds the oldest
+    // new messages, not the newest, so nothing between cursor and page end is skipped.
+    const first = await json<{ message: { id: string } }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(a.key, { body: "forward-poll-1" })),
+    );
+    await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(a.key, { body: "forward-poll-2" }));
+    await env.DB.prepare("UPDATE messages SET created_at = 1000000 WHERE id = ?").bind(first.message.id).run();
+    await env.DB.prepare("UPDATE messages SET created_at = 1000001 WHERE body = 'forward-poll-2'").run();
+    const fwd = await json<{ messages: { body: string }[] }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages?since=999999&limit=1`),
+    );
+    expect(fwd.messages.map((m) => m.body)).toEqual(["forward-poll-1"]);
+
     const garbageLimit = await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages?limit=abc`);
     expect(garbageLimit.status).toBe(200);
 
@@ -334,6 +347,14 @@ describe("events", () => {
     // Malformed since/limit must not reach the SQL layer as NaN (D1 throws on a non-integer LIMIT bind).
     const garbage = await SELF.fetch(`${BASE}/api/v1/events?since=xyz&limit=abc`);
     expect(garbage.status).toBe(200);
+
+    // A poller more than one page behind must get the OLDEST events after its cursor
+    // (so it can advance without gaps), not the newest page with the middle skipped.
+    const page = await json<{ events: { id: number }[]; cursor: number }>(
+      await SELF.fetch(`${BASE}/api/v1/events?since=${before.cursor}&limit=1`),
+    );
+    expect(page.events.length).toBe(1);
+    expect(page.events[0]!.id).toBe(before.cursor + 1);
   });
 });
 
