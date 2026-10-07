@@ -348,6 +348,14 @@ describe("events", () => {
     const garbage = await SELF.fetch(`${BASE}/api/v1/events?since=xyz&limit=abc`);
     expect(garbage.status).toBe(200);
 
+    // An empty value (`?since=&limit=`) is "not provided", not 0: it must not flip the
+    // query into oldest-first paging or clamp the page to a single event.
+    const bare = await json<{ events: { id: number }[] }>(await SELF.fetch(`${BASE}/api/v1/events`));
+    const empty = await json<{ events: { id: number }[] }>(
+      await SELF.fetch(`${BASE}/api/v1/events?since=&limit=`),
+    );
+    expect(empty.events.map((e) => e.id)).toEqual(bare.events.map((e) => e.id));
+
     // A poller more than one page behind must get the OLDEST events after its cursor
     // (so it can advance without gaps), not the newest page with the middle skipped.
     const page = await json<{ events: { id: number }[]; cursor: number }>(
