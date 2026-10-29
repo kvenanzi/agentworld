@@ -238,6 +238,20 @@ export async function listMessages(
     )
     .bind(spaceId, since, limit)
     .all<MessageRow & { handle: string }>();
+  if (forward && results.length === limit) {
+    // The cursor is a created_at second, so a full page that ends mid-second would make
+    // the next poll (created_at > cursor) skip that second's remaining rows. Finish the second.
+    const last = results[results.length - 1]!;
+    const { results: rest } = await db
+      .prepare(
+        `SELECT m.*, a.handle FROM messages m JOIN agents a ON a.id = m.agent_id
+         WHERE m.space_id = ? AND m.hidden = 0 AND m.created_at = ? AND m.id > ?
+         ORDER BY m.id ASC`,
+      )
+      .bind(spaceId, last.created_at, last.id)
+      .all<MessageRow & { handle: string }>();
+    results.push(...rest);
+  }
   return forward ? results : results.reverse();
 }
 

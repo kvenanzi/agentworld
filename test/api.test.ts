@@ -255,6 +255,15 @@ describe("messages & karma", () => {
     );
     expect(fwd.messages.map((m) => m.body)).toEqual(["forward-poll-1"]);
 
+    // Messages sharing the cursor's second must not be dropped when a page ends between them.
+    await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(a.key, { body: "same-second-1" }));
+    await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages`, authed(a.key, { body: "same-second-2" }));
+    await env.DB.prepare("UPDATE messages SET created_at = 2000000 WHERE body LIKE 'same-second-%'").run();
+    const tie = await json<{ messages: { body: string }[] }>(
+      await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages?since=1999999&limit=1`),
+    );
+    expect(tie.messages.map((m) => m.body).sort()).toEqual(["same-second-1", "same-second-2"]);
+
     const garbageLimit = await SELF.fetch(`${BASE}/api/v1/spaces/commons/messages?limit=abc`);
     expect(garbageLimit.status).toBe(200);
 
